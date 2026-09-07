@@ -1,0 +1,51 @@
+[
+    {
+        "title": "GitHub",
+        "href": "https://github.com/APasz",
+        "tier": "featured",
+        "icon": "/static/icons/github.svg",
+        "border_hover": "#f0f6fc",
+        "metadata": "29 Repositories",
+        "schema": "github"
+    },
+    {
+        "title": "Nexus Mods",
+        "href": "https://next.nexusmods.com/profile/APasz",
+        "tier": "standard",
+        "icon": "/static/icons/nexus-mods.svg",
+        "border_hover": "#e59a33"
+    },
+    {
+        "title": "Discord",
+        "href": "https://discord.com/users/375547210760454145",
+        "tier": "standard",
+        "icon": "/static/icons/discord.svg",
+        "border_hover": "#5865f2"
+    },
+    {
+        "title": "Steam",
+        "href": "https://steamcommunity.com/id/APasz",
+        "tier": "standard",
+        "icon": "/static/icons/steam.svg",
+        "border_hover": "#66c0f4"
+    },
+    {
+        "title": "Ko-fi",
+        "href": "https://ko-fi.com/apasz",
+        "tier": "utility",
+        "icon": "/static/icons/kofi.svg",
+        "border_hover": "#ff5e5b"
+    },
+    {
+        "title": "Email",
+        "href": "mailto:mail@apasz.com",
+        "tier": "utility",
+        "description": "mail@apasz.com",
+        "icon": "/static/icons/mail.svg",
+        "border_hover": "#9b6dff",
+        "schema": "mail",
+        "opens_in_new_tab": false,
+        "copy_to_clipboard": true,
+        "copy_text": "mail@apasz.com"
+    }
+]

@@ -1,0 +1,1 @@
+"""APasz public hub application."""

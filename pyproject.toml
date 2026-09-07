@@ -1,0 +1,28 @@
+[project]
+name = "apasz-hub"
+version = "0.1.0"
+description = "The APasz public hub."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "httpx>=0.28,<0.29",
+    "python-fasthtml>=0.13,<0.14",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.36.0",
+    "ruff>=0.16.6",
+]
+
+[tool.basedpyright]
+include = ["src", "tests", "main.py", "tools"]
+pythonVersion = "3.14"
+stubPath = "typings"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
