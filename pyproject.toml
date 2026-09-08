@@ -5,13 +5,18 @@ description = "The APasz public hub."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "argon2-cffi>=25.1,<26",
     "httpx>=0.28,<0.29",
+    "pydantic-settings>=2.11,<3",
     "python-fasthtml>=0.13,<0.14",
 ]
 
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
+
+[project.scripts]
+apasz-hub-setup = "apasz_hub.setup:main"
 
 [dependency-groups]
 dev = [

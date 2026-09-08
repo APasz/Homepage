@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -11,8 +10,9 @@ from hashlib import sha256
 from json import dumps
 from pathlib import Path
 from typing import Final, Literal, TypedDict, cast
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
+from apasz_hub import settings
 from apasz_hub.json_data import (
     json_object_fields,
     load_json_document,
@@ -199,6 +199,7 @@ class LinkCard:
         if self.tier is CardTier.FEATURED and not self.metadata:
             raise ValueError(f"Featured card {self.title} must include metadata.")
         self._validate_schema()
+        self._validate_icon()
         self._validate_colour_overrides()
         if self.copy_to_clipboard and not (self.copy_text and self.copy_text.strip()):
             raise ValueError(
@@ -208,20 +209,26 @@ class LinkCard:
     def _validate_schema(self) -> None:
         """Validate fields whose requirements depend on the card schema."""
 
+        if self.schema is CardKind.NORMAL and not _is_https_url(self.href):
+            raise ValueError(
+                f"Normal card {self.title} requires an absolute HTTPS destination."
+            )
         if self.schema is CardKind.MAIL and not _is_email_address(
             _mailto_recipient(self.href)
         ):
             raise ValueError(
                 f"Mail card {self.title} requires a mailto destination with an email address."
             )
-        if self.schema is CardKind.NORMAL and self.href.lower().startswith("mailto:"):
-            raise ValueError(
-                f"Normal card {self.title} cannot use a mailto destination."
-            )
         if self.schema is CardKind.GITHUB and not _github_profile_login(self.href):
             raise ValueError(
                 f"GitHub card {self.title} requires a canonical GitHub profile destination."
             )
+
+    def _validate_icon(self) -> None:
+        """Restrict card masks to an available local SVG asset."""
+
+        if not _is_available_icon_url(self.icon):
+            raise ValueError(f"{self.title} icon must be an available local SVG asset.")
 
     def _validate_colour_overrides(self) -> None:
         """Keep optional card-specific colour overrides picker-compatible."""
@@ -320,7 +327,7 @@ class SiteMetadata:
 SITE: Final = SiteMetadata(
     title="APasz",
     description="The public APasz hub for code, community, and contact links",
-    canonical_url="https://apasz.com/",
+    canonical_url=f"{settings.DEFAULT_PUBLIC_ORIGIN}/",
 )
 
 
@@ -342,9 +349,52 @@ WORDMARK_URL: Final = "/static/media/wordmark.svg"
 SITE_STYLESHEET_URL: Final = _versioned_static_url("site.css")
 SITE_SCRIPT_URL: Final = _versioned_static_url("site.js")
 DEFAULT_LINK_CARDS_PATH: Final = Path(__file__).with_name("link_cards.json")
-LINK_CARDS_PATH_ENV: Final = "APASZ_HUB_LINK_CARDS_PATH"
+LINK_CARDS_PATH_ENV: Final = settings.LINK_CARDS_PATH_ENV
 ICON_DIRECTORY: Final = Path(__file__).with_name("static") / "icons"
 ICON_URL_PREFIX: Final = "/static/icons"
+
+
+def _is_https_url(value: str) -> bool:
+    """Whether a normal-card destination is a safe absolute HTTPS URL."""
+
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.casefold() == "https"
+        and parsed.hostname is not None
+        and parsed.username is None
+        and parsed.password is None
+        and not any(character.isspace() or ord(character) < 32 for character in value)
+    )
+
+
+def _is_available_icon_url(value: str) -> bool:
+    """Whether a card icon identifies exactly one SVG in the local icon directory."""
+
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        return False
+    prefix = f"{ICON_URL_PREFIX}/"
+    if not parsed.path.startswith(prefix):
+        return False
+    filename = unquote(parsed.path.removeprefix(prefix))
+    if (
+        not filename
+        or Path(filename).name != filename
+        or "\\" in filename
+        or Path(filename).suffix.casefold() != ".svg"
+        or any(character.isspace() or ord(character) < 32 for character in filename)
+    ):
+        return False
+    return (ICON_DIRECTORY / filename).is_file()
+
+
 DEFAULT_NEW_LINK_CARD: Final = LinkCard(
     title="New Link",
     href="https://example.com",
@@ -921,13 +971,10 @@ def _form_boolean(
 def _configured_link_cards_path() -> Path:
     """Return the packaged default or an explicitly writable data-file path."""
 
-    configured_path = os.environ.get(LINK_CARDS_PATH_ENV)
+    configured_path = settings.load_settings().link_cards_path
     if configured_path is None:
         return DEFAULT_LINK_CARDS_PATH
-    configured_path = configured_path.strip()
-    if not configured_path:
-        raise LinkCardDataError(f"{LINK_CARDS_PATH_ENV} must not be empty.")
-    return Path(configured_path)
+    return configured_path
 
 
 def _parse_link_card(value: object, index: int) -> LinkCard:

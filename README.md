@@ -24,11 +24,12 @@ uv run python -m unittest discover -s tests -v
 
 ## Link cards
 
-Link cards are loaded and validated once when the server starts. Visit `/config`
-to edit its in-memory draft. **Add Link** appends a default card, and **Delete**
-appears on expanded cards; neither change is live until **Save Links** atomically
-writes the draft to `src/apasz_hub/link_cards.json` and publishes it to the
-homepage. External JSON changes require a server restart to be picked up.
+Link cards are loaded and validated once when the server starts. After enabling
+configuration access, visit `/config` to edit its in-memory draft. **Add Link**
+appends a default card, and **Delete** appears on expanded cards; neither change
+is live until **Save Links** atomically writes the draft to
+`src/apasz_hub/link_cards.json` and publishes it to the homepage. External JSON
+changes require a server restart to be picked up.
 
 Each card requires `title`, `href`, `tier`, and `icon`
 `tier` is `featured`, `standard`, or `utility`
@@ -47,13 +48,60 @@ a full URL, GitHub cards use only a username, and email cards use only an email
 address. The latter two are converted to their canonical `href` values when
 the draft is saved.
 
+## Configuration access
+
+`/config` is closed by default. The public footer deliberately does not link to
+it. To enable the single-administrator editor, run this once from the project
+root:
+
+```bash
+uv run apasz-hub-setup
+```
+
+It prompts twice for the configuration password without echoing it, generates
+the Argon2id password hash and session secret, and atomically creates a
+mode-`600` `.env`. The default browser origin is `https://apasz.com`. For
+another deployment, supply its exact external origin, without a path:
+
+```bash
+uv run apasz-hub-setup --origin https://example.com
+```
+
+The command refuses to touch an existing `.env`. `--replace` deliberately
+creates fresh credentials and replaces the entire file, so back up any runtime
+settings in it first. [.env.example](.env.example) remains available for a
+manual setup.
+
+A partial or invalid access configuration leaves `/config` closed and records a
+startup error. The app reads `.env` with Pydantic Settings and rejects unknown
+dotenv names, so typos fail loudly instead of being silently ignored.
+
+Never commit `.env`; it is ignored by Git. A successful login creates a
+server-side session with a 30-minute idle lifetime and an eight-hour absolute
+lifetime; restarting the application or rotating the session secret invalidates
+all sessions.
+
+Cookies are HTTPS-only by default. For a loopback HTTP development server only,
+use the explicit local-only option. Never use it in production.
+
+```bash
+uv run apasz-hub-setup --origin http://127.0.0.1:5001 --insecure-cookie
+```
+
+Every authenticated configuration write verifies both a per-session CSRF token
+and the exact configured `Origin`. Login attempts are rate-limited after five
+failures in 15 minutes. Login outcomes and explicit configuration save, add,
+and delete actions are logged without logging passwords or submitted
+configuration data.
+
 ## Appearance
 
 Shared interface colours are stored in `src/apasz_hub/theme_colors.json` and
-supplied to the site through `/theme.css`. Visit `/config` to preview changes,
-then use **Save colours** to persist the JSON file. Reset discards unsaved edits.
+supplied to the site through `/theme.css`. The authenticated `/config` page
+previews changes; **Save colours** persists the JSON file. Reset discards
+unsaved edits.
 
-For deployment, set `APASZ_HUB_THEME_COLORS_PATH` to a persistent writable JSON
+For deployment, set `THEME_COLORS_PATH` in `.env` to a persistent writable JSON
 file rather than the packaged default.
 
 Link-card border and icon colours can be overridden from `/config`. Leave Auto
@@ -67,8 +115,8 @@ server starts and then every 18 hours. Homepage visits only use the last
 refreshed value. Configured metadata is used until the first successful refresh;
 the last successful value remains visible through a temporary GitHub failure.
 
-For deployment, `APASZ_HUB_LINK_CARDS_PATH` can select another card file
-Use an absolute path in persistent writable storage
+For deployment, set `LINK_CARDS_PATH` in `.env` to an alternate card file.
+Use an absolute path in persistent writable storage.
 
 ## Production
 
@@ -76,12 +124,17 @@ Use an absolute path in persistent writable storage
 Run the production entry point instead:
 
 ```bash
-PORT=5001 APASZ_HUB_HOST=127.0.0.1 uv run python -m apasz_hub.production
+PORT=5001 HOST=127.0.0.1 uv run python -m apasz_hub.production
 ```
 
 Production disables reload, proxy-header trust, and Uvicorn's identifying header
 It binds to loopback by default;
-set `APASZ_HUB_HOST=0.0.0.0` only when a container platform requires it
+set `HOST=0.0.0.0` only when a container platform requires it
+
+When a TLS proxy or CDN fronts the site, firewall the application port so the
+origin cannot be reached directly. Set `PUBLIC_ORIGIN` to the public
+HTTPS origin; do not derive it from untrusted request headers. An identity-aware
+proxy with MFA and edge rate limiting can provide an additional admin boundary.
 
 Responses use a restrictive CSP and browser-hardening headers
 Card inline styles remain allowed

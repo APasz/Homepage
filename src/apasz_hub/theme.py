@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -11,6 +10,7 @@ from pathlib import Path
 from re import compile
 from typing import Final
 
+from apasz_hub import settings
 from apasz_hub.json_data import (
     json_object_fields,
     load_json_document,
@@ -82,7 +82,7 @@ type ThemeColors = tuple[ThemeColor, ...]
 THEME_STYLESHEET_URL: Final = "/theme.css"
 THEME_STYLESHEET_CACHE_CONTROL: Final = "no-store"
 DEFAULT_THEME_COLORS_PATH: Final = Path(__file__).with_name("theme_colors.json")
-THEME_COLORS_PATH_ENV: Final = "APASZ_HUB_THEME_COLORS_PATH"
+THEME_COLORS_PATH_ENV: Final = settings.THEME_COLORS_PATH_ENV
 THEME_COLOR_DEFINITIONS: Final[tuple[ThemeColorDefinition, ...]] = (
     ThemeColorDefinition(ThemeColorToken.CANVAS, "Canvas"),
     ThemeColorDefinition(ThemeColorToken.SURFACE, "Surface"),
@@ -180,13 +180,10 @@ def _shadow_css_value(value: str) -> str:
 def _configured_theme_colors_path() -> Path:
     """Return the packaged default or explicitly writable palette file path."""
 
-    configured_path = os.environ.get(THEME_COLORS_PATH_ENV)
+    configured_path = settings.load_settings().theme_colors_path
     if configured_path is None:
         return DEFAULT_THEME_COLORS_PATH
-    configured_path = configured_path.strip()
-    if not configured_path:
-        raise ThemeColorDataError(f"{THEME_COLORS_PATH_ENV} must not be empty.")
-    return Path(configured_path)
+    return configured_path
 
 
 def _theme_colors_from_fields(values: Mapping[str, object]) -> ThemeColors:

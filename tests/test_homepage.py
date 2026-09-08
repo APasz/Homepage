@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from base64 import urlsafe_b64encode
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,6 +20,7 @@ except ModuleNotFoundError:
     uvloop = None
 
 import apasz_hub.app as application
+from apasz_hub import config_security
 from apasz_hub.app import STATIC_DIRECTORY, app
 from apasz_hub.components import (
     document_headers,
@@ -49,7 +53,12 @@ from apasz_hub.github import (
     GithubRepositoryCountUnavailable,
 )
 from apasz_hub.middleware import SECURITY_HEADERS, STATIC_CACHE_CONTROL
-from apasz_hub.pages import SitePage, configuration_page, homepage
+from apasz_hub.pages import (
+    SitePage,
+    configuration_login_page,
+    configuration_page,
+    homepage,
+)
 from apasz_hub.theme import (
     DEFAULT_THEME_COLORS_PATH,
     THEME_COLORS_PATH_ENV,
@@ -61,14 +70,78 @@ from apasz_hub.theme import (
 )
 from tests.link_card_form_data import link_card_form_values
 
+CONFIG_TEST_ORIGIN = "https://testserver"
+CONFIG_TEST_PASSWORD = "correct horse battery staple"
+CONFIG_TEST_ENVIRONMENT = {
+    config_security.CONFIG_PASSWORD_HASH_ENV: config_security.CONFIG_PASSWORD_HASHER.hash(
+        CONFIG_TEST_PASSWORD
+    ),
+    config_security.CONFIG_SESSION_SECRET_ENV: urlsafe_b64encode(b"t" * 32)
+    .decode()
+    .rstrip("="),
+    config_security.PUBLIC_ORIGIN_ENV: CONFIG_TEST_ORIGIN,
+}
 
-async def _application_responses() -> tuple[
+
+def _config_access() -> config_security.ConfigAccess:
+    """Return isolated, HTTPS-only configuration authentication for one test."""
+
+    return config_security.ConfigAccess(environment=CONFIG_TEST_ENVIRONMENT)
+
+
+async def _authenticate_config_client(
+    client: httpx.AsyncClient,
+    access: config_security.ConfigAccess,
+) -> str:
+    """Log a test client in and return its CSRF token."""
+
+    response = await client.post(
+        SitePage.CONFIG_LOGIN.value,
+        data={config_security.CONFIG_PASSWORD_FORM_NAME: CONFIG_TEST_PASSWORD},
+        headers={"Origin": CONFIG_TEST_ORIGIN},
+        follow_redirects=False,
+    )
+    if response.status_code != 303:
+        raise AssertionError(f"Configuration login failed with {response.status_code}.")
+    settings = access.settings()
+    if settings is None:
+        raise AssertionError("Test configuration access is unavailable.")
+    session_id = client.cookies.get(
+        config_security.configuration_session_cookie_name(settings),
+    )
+    session = access.authenticate(session_id)
+    if session is None:
+        raise AssertionError("Configuration login did not create a session.")
+    return session.csrf_token
+
+
+def _csrf_form_values(
+    values: Mapping[str, object],
+    csrf_token: str,
+) -> dict[str, object]:
+    """Add the configuration CSRF field to a submitted form snapshot."""
+
+    return {**values, config_security.CONFIG_CSRF_FORM_NAME: csrf_token}
+
+
+def _config_headers(csrf_token: str) -> dict[str, str]:
+    """Return browser request metadata expected by protected config routes."""
+
+    return {
+        "Origin": CONFIG_TEST_ORIGIN,
+        config_security.CONFIG_CSRF_HEADER: csrf_token,
+    }
+
+
+async def _application_responses(
+    access: config_security.ConfigAccess,
+) -> tuple[
     httpx.Response, httpx.Response, httpx.Response, httpx.Response, httpx.Response
 ]:
     with patch("apasz_hub.pages.GITHUB_REPOSITORY_COUNTS", _repository_count_cache()):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
+            transport=transport, base_url=CONFIG_TEST_ORIGIN
         ) as client:
             page_response = await client.get("/")
             stylesheet_response = await client.get(SITE_STYLESHEET_URL)
@@ -76,6 +149,7 @@ async def _application_responses() -> tuple[
                 SITE_STYLESHEET_URL,
                 headers={"If-None-Match": stylesheet_response.headers["etag"]},
             )
+            await _authenticate_config_client(client, access)
             config_response = await client.get("/config")
             theme_response = await client.get(THEME_STYLESHEET_URL)
             return (
@@ -92,9 +166,11 @@ def _run_application_responses() -> tuple[
 ]:
     """Exercise file responses on Uvicorn's available event loop."""
 
-    if uvloop is None:
-        return asyncio.run(_application_responses())
-    return uvloop.run(_application_responses())
+    access = _config_access()
+    with patch.object(config_security, "CONFIG_ACCESS", access):
+        if uvloop is None:
+            return asyncio.run(_application_responses(access))
+        return uvloop.run(_application_responses(access))
 
 
 class HomepageTests(TestCase):
@@ -114,13 +190,20 @@ class HomepageTests(TestCase):
             self.assertIn(card.href, document)
         self.assertIn('data-copy-text="mail@apasz.com"', document)
         self.assertIn('aria-current="page"', document)
-        self.assertIn('href="/config"', document)
+        self.assertNotIn('href="/config"', document)
 
     def test_configuration_page_renders_editable_controls(self) -> None:
         colors = load_theme_colors()
         cards = load_link_cards()
         icon_assets = load_icon_assets()
-        document = render(configuration_page(colors, cards, icon_assets))
+        document = render(
+            configuration_page(
+                colors,
+                cards,
+                icon_assets,
+                csrf_token="test-csrf-token",
+            )
+        )
 
         self.assertIn("Configuration", document)
         self.assertIn('class="site-shell"', document)
@@ -210,11 +293,12 @@ class HomepageTests(TestCase):
         self.assertIn('data-theme-controls=""', document)
         self.assertIn('data-theme-reset=""', document)
         self.assertIn('action="/config/colours"', document)
+        self.assertIn('action="/config/logout"', document)
+        self.assertIn('name="config-csrf-token" value="test-csrf-token"', document)
         self.assertIn('enctype="application/x-www-form-urlencoded"', document)
         self.assertIn('type="submit"', document)
         self.assertIn("Save colours", document)
-        self.assertIn('href="/config"', document)
-        self.assertIn('aria-current="page"', document)
+        self.assertNotIn('href="/config"', document)
         self.assertNotIn('data-theme-color="github"', document)
         self.assertNotIn("Button styles", document)
         self.assertNotIn("button-showcase", document)
@@ -225,6 +309,14 @@ class HomepageTests(TestCase):
             )
             self.assertIn(f'name="{color.token.value}"', document)
             self.assertIn(f'value="{color.value}"', document)
+
+    def test_configuration_login_does_not_mislabel_home_as_the_current_page(
+        self,
+    ) -> None:
+        document = render(configuration_login_page())
+
+        self.assertIn('action="/config/login"', document)
+        self.assertNotIn('aria-current="page"', document)
 
     def test_icons_are_available_locally(self) -> None:
         icon_urls = [card.icon for card in load_link_cards()]
@@ -494,7 +586,9 @@ class HomepageTests(TestCase):
             values = link_card_form_values(store.draft_cards())
             values[link_card_form_name(0, LinkCardFormField.TITLE)] = draft_title
 
-            async def update_and_save() -> tuple[
+            async def update_and_save(
+                access: config_security.ConfigAccess,
+            ) -> tuple[
                 httpx.Response,
                 str,
                 httpx.Response,
@@ -506,15 +600,18 @@ class HomepageTests(TestCase):
                 transport = httpx.ASGITransport(app=app)
                 async with httpx.AsyncClient(
                     transport=transport,
-                    base_url="http://testserver",
+                    base_url=CONFIG_TEST_ORIGIN,
                 ) as client:
+                    csrf_token = await _authenticate_config_client(client, access)
+                    request_values = _csrf_form_values(values, csrf_token)
                     draft_response = await client.post(
                         SitePage.CONFIG_LINK_CARDS_DRAFT.value,
-                        data=values,
+                        data=request_values,
                         headers={
+                            **_config_headers(csrf_token),
                             application.LINK_CARD_DRAFT_REVISION_HEADER: str(
                                 draft_revision
-                            )
+                            ),
                         },
                     )
                     draft_document = path.read_text(encoding="utf-8")
@@ -522,7 +619,8 @@ class HomepageTests(TestCase):
                     config_draft = await client.get("/config")
                     save_response = await client.post(
                         SitePage.CONFIG_LINK_CARDS_SAVE.value,
-                        data=values,
+                        data=request_values,
+                        headers=_config_headers(csrf_token),
                         follow_redirects=False,
                     )
                     saved_config = await client.get(save_response.headers["location"])
@@ -537,7 +635,11 @@ class HomepageTests(TestCase):
                         published_after_save,
                     )
 
-            with patch.object(application, "LINK_CARD_STORE", store):
+            access = _config_access()
+            with (
+                patch.object(application, "LINK_CARD_STORE", store),
+                patch.object(config_security, "CONFIG_ACCESS", access),
+            ):
                 (
                     draft_response,
                     draft_document,
@@ -546,7 +648,7 @@ class HomepageTests(TestCase):
                     save_response,
                     saved_config,
                     published_after_save,
-                ) = asyncio.run(update_and_save())
+                ) = asyncio.run(update_and_save(access))
             saved_cards = load_link_cards(path)
 
         self.assertEqual(draft_response.status_code, 204)
@@ -579,22 +681,30 @@ class HomepageTests(TestCase):
             updated_title = "Updated first link"
             values[link_card_form_name(0, LinkCardFormField.TITLE)] = updated_title
 
-            async def add_link_card() -> tuple[httpx.Response, httpx.Response]:
+            async def add_link_card(
+                access: config_security.ConfigAccess,
+            ) -> tuple[httpx.Response, httpx.Response]:
                 transport = httpx.ASGITransport(app=app)
                 async with httpx.AsyncClient(
                     transport=transport,
-                    base_url="http://testserver",
+                    base_url=CONFIG_TEST_ORIGIN,
                 ) as client:
+                    csrf_token = await _authenticate_config_client(client, access)
                     add_response = await client.post(
                         SitePage.CONFIG_LINK_CARDS_ADD.value,
-                        data=values,
+                        data=_csrf_form_values(values, csrf_token),
+                        headers=_config_headers(csrf_token),
                         follow_redirects=False,
                     )
                     config_response = await client.get(add_response.headers["location"])
                     return add_response, config_response
 
-            with patch.object(application, "LINK_CARD_STORE", store):
-                add_response, config_response = asyncio.run(add_link_card())
+            access = _config_access()
+            with (
+                patch.object(application, "LINK_CARD_STORE", store),
+                patch.object(config_security, "CONFIG_ACCESS", access),
+            ):
+                add_response, config_response = asyncio.run(add_link_card(access))
             draft_document = path.read_text(encoding="utf-8")
 
         self.assertEqual(add_response.status_code, 303)
@@ -622,15 +732,19 @@ class HomepageTests(TestCase):
             values[link_card_form_name(1, LinkCardFormField.DESTINATION)] = ""
             values[LINK_CARD_DELETE_INDEX_FORM_NAME] = "1"
 
-            async def delete_link_card() -> tuple[httpx.Response, httpx.Response]:
+            async def delete_link_card(
+                access: config_security.ConfigAccess,
+            ) -> tuple[httpx.Response, httpx.Response]:
                 transport = httpx.ASGITransport(app=app)
                 async with httpx.AsyncClient(
                     transport=transport,
-                    base_url="http://testserver",
+                    base_url=CONFIG_TEST_ORIGIN,
                 ) as client:
+                    csrf_token = await _authenticate_config_client(client, access)
                     delete_response = await client.post(
                         SitePage.CONFIG_LINK_CARDS_DELETE.value,
-                        data=values,
+                        data=_csrf_form_values(values, csrf_token),
+                        headers=_config_headers(csrf_token),
                         follow_redirects=False,
                     )
                     config_response = await client.get(
@@ -638,8 +752,12 @@ class HomepageTests(TestCase):
                     )
                     return delete_response, config_response
 
-            with patch.object(application, "LINK_CARD_STORE", store):
-                delete_response, config_response = asyncio.run(delete_link_card())
+            access = _config_access()
+            with (
+                patch.object(application, "LINK_CARD_STORE", store),
+                patch.object(config_security, "CONFIG_ACCESS", access),
+            ):
+                delete_response, config_response = asyncio.run(delete_link_card(access))
             draft_document = path.read_text(encoding="utf-8")
 
         self.assertEqual(delete_response.status_code, 303)
@@ -666,19 +784,27 @@ class HomepageTests(TestCase):
             values = link_card_form_values(store.draft_cards())
             values[link_card_form_name(0, LinkCardFormField.TITLE)] = ""
 
-            async def submit_invalid_draft() -> httpx.Response:
+            async def submit_invalid_draft(
+                access: config_security.ConfigAccess,
+            ) -> httpx.Response:
                 transport = httpx.ASGITransport(app=app)
                 async with httpx.AsyncClient(
                     transport=transport,
-                    base_url="http://testserver",
+                    base_url=CONFIG_TEST_ORIGIN,
                 ) as client:
+                    csrf_token = await _authenticate_config_client(client, access)
                     return await client.post(
                         SitePage.CONFIG_LINK_CARDS_DRAFT.value,
-                        data=values,
+                        data=_csrf_form_values(values, csrf_token),
+                        headers=_config_headers(csrf_token),
                     )
 
-            with patch.object(application, "LINK_CARD_STORE", store):
-                response = asyncio.run(submit_invalid_draft())
+            access = _config_access()
+            with (
+                patch.object(application, "LINK_CARD_STORE", store),
+                patch.object(config_security, "CONFIG_ACCESS", access),
+            ):
+                response = asyncio.run(submit_invalid_draft(access))
             saved_document = path.read_text(encoding="utf-8")
 
         self.assertEqual(response.status_code, 422)
@@ -690,17 +816,19 @@ class HomepageTests(TestCase):
         values = {color.token.value: color.value for color in load_theme_colors()}
         values[ThemeColorToken.CANVAS.value] = "#123456"
 
-        async def save_palette() -> tuple[
-            httpx.Response, httpx.Response, httpx.Response
-        ]:
+        async def save_palette(
+            access: config_security.ConfigAccess,
+        ) -> tuple[httpx.Response, httpx.Response, httpx.Response]:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
                 transport=transport,
-                base_url="http://testserver",
+                base_url=CONFIG_TEST_ORIGIN,
             ) as client:
+                csrf_token = await _authenticate_config_client(client, access)
                 save_response = await client.post(
                     SitePage.CONFIG_COLOURS_SAVE.value,
-                    data=values,
+                    data=_csrf_form_values(values, csrf_token),
+                    headers=_config_headers(csrf_token),
                     follow_redirects=False,
                 )
                 config_response = await client.get(save_response.headers["location"])
@@ -714,12 +842,14 @@ class HomepageTests(TestCase):
                 encoding="utf-8",
             )
             with patch.dict(
-                "apasz_hub.theme.os.environ",
+                os.environ,
                 {THEME_COLORS_PATH_ENV: str(path)},
             ):
-                save_response, config_response, theme_response = asyncio.run(
-                    save_palette()
-                )
+                access = _config_access()
+                with patch.object(config_security, "CONFIG_ACCESS", access):
+                    save_response, config_response, theme_response = asyncio.run(
+                        save_palette(access)
+                    )
             saved_colors = load_theme_colors(path)
 
         self.assertEqual(save_response.status_code, 303)
@@ -744,14 +874,17 @@ class HomepageTests(TestCase):
         values = {color.token.value: color.value for color in load_theme_colors()}
         values[ThemeColorToken.ACCENT.value] = "purple"
 
-        async def save_palette() -> httpx.Response:
+        async def save_palette(access: config_security.ConfigAccess) -> httpx.Response:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
                 transport=transport,
-                base_url="http://testserver",
+                base_url=CONFIG_TEST_ORIGIN,
             ) as client:
+                csrf_token = await _authenticate_config_client(client, access)
                 return await client.post(
-                    SitePage.CONFIG_COLOURS_SAVE.value, data=values
+                    SitePage.CONFIG_COLOURS_SAVE.value,
+                    data=_csrf_form_values(values, csrf_token),
+                    headers=_config_headers(csrf_token),
                 )
 
         with TemporaryDirectory() as temporary_directory:
@@ -759,10 +892,12 @@ class HomepageTests(TestCase):
             original_document = DEFAULT_THEME_COLORS_PATH.read_text(encoding="utf-8")
             path.write_text(original_document, encoding="utf-8")
             with patch.dict(
-                "apasz_hub.theme.os.environ",
+                os.environ,
                 {THEME_COLORS_PATH_ENV: str(path)},
             ):
-                response = asyncio.run(save_palette())
+                access = _config_access()
+                with patch.object(config_security, "CONFIG_ACCESS", access):
+                    response = asyncio.run(save_palette(access))
             saved_document = path.read_text(encoding="utf-8")
 
         self.assertEqual(response.status_code, 422)

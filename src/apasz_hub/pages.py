@@ -7,6 +7,12 @@ from enum import StrEnum
 from typing import Final
 
 from apasz_hub.components import ButtonStyle, button_class, link_card, utility_link
+from apasz_hub.config_security import (
+    CONFIG_CSRF_FORM_NAME,
+    CONFIG_LOGIN_PATH,
+    CONFIG_LOGOUT_PATH,
+    CONFIG_PASSWORD_FORM_NAME,
+)
 from apasz_hub.data import (
     LINK_CARD_COLOUR_CONTROL_PAIRS,
     LINK_CARD_DELETE_INDEX_FORM_NAME,
@@ -68,6 +74,8 @@ class SitePage(StrEnum):
 
     HOME = "/"
     CONFIG = "/config"
+    CONFIG_LOGIN = CONFIG_LOGIN_PATH
+    CONFIG_LOGOUT = CONFIG_LOGOUT_PATH
     CONFIG_COLOURS_SAVE = "/config/colours"
     CONFIG_LINK_CARDS_DRAFT = "/config/link-cards/draft"
     CONFIG_LINK_CARDS_ADD = "/config/link-cards/add"
@@ -75,10 +83,7 @@ class SitePage(StrEnum):
     CONFIG_LINK_CARDS_SAVE = "/config/link-cards"
 
 
-_SITE_NAVIGATION: Final[tuple[tuple[SitePage, str], ...]] = (
-    (SitePage.HOME, "Home"),
-    (SitePage.CONFIG, "Config"),
-)
+_SITE_NAVIGATION: Final[tuple[tuple[SitePage, str], ...]] = ((SitePage.HOME, "Home"),)
 
 
 async def homepage(
@@ -140,6 +145,7 @@ def configuration_page(
     cards: tuple[LinkCard, ...],
     icon_assets: tuple[IconAsset, ...],
     *,
+    csrf_token: str,
     colours_saved: bool = False,
     link_cards_saved: bool = False,
     link_cards_dirty: bool = False,
@@ -152,6 +158,21 @@ def configuration_page(
     return Main(
         Header(
             H1("Configuration", cls="config-header__title"),
+            Form(
+                Input(
+                    type="hidden",
+                    name=CONFIG_CSRF_FORM_NAME,
+                    value=csrf_token,
+                ),
+                Button(
+                    "Log out",
+                    type="submit",
+                    cls=button_class(ButtonStyle.BETA),
+                ),
+                action=SitePage.CONFIG_LOGOUT.value,
+                method="post",
+                cls="config-header__logout",
+            ),
             cls="config-header",
         ),
         _link_card_manager(
@@ -161,9 +182,15 @@ def configuration_page(
             saved=link_cards_saved,
             dirty=link_cards_dirty,
             draft_revision=link_cards_draft_revision,
+            csrf_token=csrf_token,
         ),
         Section(
             Form(
+                Input(
+                    type="hidden",
+                    name=CONFIG_CSRF_FORM_NAME,
+                    value=csrf_token,
+                ),
                 Section(
                     H2("Site colours", cls="config-group__title"),
                     Div(
@@ -204,7 +231,54 @@ def configuration_page(
             aria_label="Colour configuration",
             cls="config-panel",
         ),
-        _site_footer(SitePage.CONFIG),
+        _site_footer(),
+        cls="site-shell",
+    )
+
+
+def configuration_login_page(*, failed: bool = False) -> HtmlNode:
+    """Build the password-only gateway to the private configuration editor."""
+
+    status = "Incorrect password" if failed else "Enter the administrator password"
+    return Main(
+        Header(
+            H1("Configuration login", cls="config-header__title"),
+            cls="config-header",
+        ),
+        Section(
+            Form(
+                Section(
+                    Label(
+                        Span("Password", cls="link-card-control__label"),
+                        Input(
+                            type="password",
+                            name=CONFIG_PASSWORD_FORM_NAME,
+                            autocomplete="current-password",
+                            maxlength="1024",
+                            required="",
+                            cls="link-card-control__input",
+                        ),
+                        cls="link-card-control",
+                    ),
+                    P(status, aria_live="polite", cls="config-status"),
+                    cls="config-group config-login__fields",
+                ),
+                Div(
+                    Button(
+                        "Sign in",
+                        type="submit",
+                        cls=button_class(ButtonStyle.ALPHA),
+                    ),
+                    cls="config-actions config-login__actions",
+                ),
+                action=SitePage.CONFIG_LOGIN.value,
+                method="post",
+                cls="config-form",
+            ),
+            aria_label="Configuration login",
+            cls="config-panel config-login",
+        ),
+        _site_footer(),
         cls="site-shell",
     )
 
@@ -255,6 +329,7 @@ def _link_card_manager(
     saved: bool,
     dirty: bool,
     draft_revision: int,
+    csrf_token: str,
 ) -> HtmlNode:
     """Render expandable controls for the in-memory LinkCard draft."""
 
@@ -270,6 +345,11 @@ def _link_card_manager(
             cls="link-card-manager__header",
         ),
         Form(
+            Input(
+                type="hidden",
+                name=CONFIG_CSRF_FORM_NAME,
+                value=csrf_token,
+            ),
             Div(
                 *(
                     _link_card_manager_card(card, index, colors)
@@ -731,7 +811,7 @@ def _link_card_control_attributes(
     return attributes
 
 
-def _site_footer(current_page: SitePage) -> HtmlNode:
+def _site_footer(current_page: SitePage | None = None) -> HtmlNode:
     """Render the shared footer and indicate the active page."""
 
     return Footer(
@@ -754,7 +834,7 @@ def _site_footer(current_page: SitePage) -> HtmlNode:
 def _site_navigation_link(
     page: SitePage,
     label: str,
-    current_page: SitePage,
+    current_page: SitePage | None,
 ) -> HtmlNode:
     """Build one footer navigation link with its current-page state."""
 

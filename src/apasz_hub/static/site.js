@@ -1,6 +1,8 @@
 const COPY_FEEDBACK_DURATION_MS = 1600;
 const DRAFT_SYNC_DELAY_MS = 350;
 const DRAFT_REVISION_HEADER = "X-Link-Card-Draft-Revision";
+const CONFIG_CSRF_HEADER = "X-CSRF-Token";
+const CONFIG_CSRF_FORM_NAME = "config-csrf-token";
 const HEX_COLOUR_PATTERN = /^#[\da-f]{6}$/i;
 
 async function copyText(text) {
@@ -252,6 +254,12 @@ function configureLinkCardControls() {
     if (!draftUrl) {
         return;
     }
+    const csrfToken = form.querySelector(
+        `input[name="${CONFIG_CSRF_FORM_NAME}"]`,
+    );
+    if (!(csrfToken instanceof HTMLInputElement) || !csrfToken.value) {
+        return;
+    }
 
     const status = form.querySelector("[data-link-card-status]");
     const controls = [
@@ -403,6 +411,7 @@ function configureLinkCardControls() {
                 body: new FormData(form),
                 headers: {
                     Accept: "application/json",
+                    [CONFIG_CSRF_HEADER]: csrfToken.value,
                     [DRAFT_REVISION_HEADER]: String(draftStoreRevision),
                 },
             });

@@ -7,7 +7,6 @@ checking while still using FastHTML components directly.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Final, Protocol, cast
@@ -17,8 +16,10 @@ from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Receive, Scope, Send
 
-DEVELOPMENT_HOST: Final = "127.0.0.1"
-DEFAULT_PORT: Final = 5001
+from apasz_hub import settings
+
+DEVELOPMENT_HOST: Final = settings.DEFAULT_HOST
+DEFAULT_PORT: Final = settings.DEFAULT_PORT
 DEFAULT_PRODUCTION_HOST: Final = DEVELOPMENT_HOST
 
 
@@ -135,27 +136,15 @@ def _serve(**options: object) -> None:
 
 
 def _server_port() -> int:
-    """Read and validate the conventional deployment port override."""
+    """Read the validated conventional deployment port override."""
 
-    raw_port = os.environ.get("PORT")
-    if raw_port is None:
-        return DEFAULT_PORT
-    try:
-        port = int(raw_port)
-    except ValueError as error:
-        raise ValueError("PORT must be an integer between 1 and 65535.") from error
-    if not 1 <= port <= 65535:
-        raise ValueError("PORT must be an integer between 1 and 65535.")
-    return port
+    return settings.load_settings().port
 
 
 def _production_host() -> str:
-    """Return an explicitly configurable production bind address."""
+    """Return the validated configurable production bind address."""
 
-    host = os.environ.get("APASZ_HUB_HOST", DEFAULT_PRODUCTION_HOST).strip()
-    if not host:
-        raise ValueError("APASZ_HUB_HOST must not be empty.")
-    return host
+    return settings.load_settings().host
 
 
 def render(*nodes: HtmlNode) -> str:

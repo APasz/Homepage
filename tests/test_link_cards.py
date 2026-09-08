@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from json import dumps
 from pathlib import Path
@@ -23,6 +24,7 @@ from apasz_hub.data import (
     link_card_form_name,
     load_link_cards,
 )
+from apasz_hub.settings import SettingsValidationError
 from tests.link_card_form_data import link_card_form_values
 
 
@@ -121,6 +123,40 @@ class LinkCardDataTests(TestCase):
 
             with self.assertRaisesRegex(LinkCardDataError, "border static colour"):
                 load_link_cards(path)
+
+    def test_normal_cards_require_https_destinations_and_local_svg_icons(self) -> None:
+        with self.assertRaisesRegex(ValueError, "absolute HTTPS"):
+            LinkCard(
+                title="Unsafe destination",
+                href="javascript:alert(1)",
+                tier=CardTier.STANDARD,
+                icon="/static/icons/github.svg",
+            )
+        with self.assertRaisesRegex(ValueError, "available local SVG"):
+            LinkCard(
+                title="Missing icon",
+                href="https://example.com",
+                tier=CardTier.STANDARD,
+                icon="/static/icons/missing.svg",
+            )
+        for icon in (
+            "/static/icons/%2e%2e%2fgithub.svg",
+            "/static/icons/%00.svg",
+            "https://example.com/github.svg",
+        ):
+            with (
+                self.subTest(icon=icon),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "available local SVG",
+                ),
+            ):
+                LinkCard(
+                    title="Unsafe icon",
+                    href="https://example.com",
+                    tier=CardTier.STANDARD,
+                    icon=icon,
+                )
 
     def test_load_link_cards_accepts_a_github_profile_schema(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -252,9 +288,10 @@ class LinkCardDataTests(TestCase):
 
     def test_load_link_cards_rejects_an_empty_path_override(self) -> None:
         with (
-            patch.dict("apasz_hub.data.os.environ", {LINK_CARDS_PATH_ENV: "   "}),
+            patch.dict(os.environ, {LINK_CARDS_PATH_ENV: "   "}),
             self.assertRaisesRegex(
-                LinkCardDataError, f"{LINK_CARDS_PATH_ENV} must not be empty"
+                SettingsValidationError,
+                f"{LINK_CARDS_PATH_ENV}: must not be empty",
             ),
         ):
             load_link_cards()
@@ -429,7 +466,7 @@ class LinkCardDataTests(TestCase):
             _write_cards(changed_path, [_card("Changed destination")])
 
             with patch.dict(
-                "apasz_hub.data.os.environ",
+                os.environ,
                 {LINK_CARDS_PATH_ENV: str(startup_path)},
             ):
                 store = LinkCardStore()
@@ -438,7 +475,7 @@ class LinkCardDataTests(TestCase):
             values[link_card_form_name(0, LinkCardFormField.TITLE)] = "Saved draft"
 
             with patch.dict(
-                "apasz_hub.data.os.environ",
+                os.environ,
                 {LINK_CARDS_PATH_ENV: str(changed_path)},
             ):
                 store.update_draft(values)

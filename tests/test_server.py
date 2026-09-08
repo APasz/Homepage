@@ -35,7 +35,7 @@ class ServerTests(TestCase):
         with (
             patch.dict(
                 os.environ,
-                {"APASZ_HUB_HOST": "0.0.0.0", "PORT": "8080"},
+                {"HOST": "0.0.0.0", "PORT": "8080"},
                 clear=True,
             ),
             patch.object(framework, "_serve") as serve,

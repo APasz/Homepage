@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from json import dumps
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
+from apasz_hub.settings import SettingsValidationError
 from apasz_hub.theme import (
     DEFAULT_THEME_COLORS_PATH,
     THEME_COLORS_PATH_ENV,
@@ -86,12 +88,12 @@ class ThemeColorDataTests(TestCase):
     def test_empty_palette_path_override_fails_loudly(self) -> None:
         with (
             patch.dict(
-                "apasz_hub.theme.os.environ",
+                os.environ,
                 {THEME_COLORS_PATH_ENV: "   "},
             ),
             self.assertRaisesRegex(
-                ThemeColorDataError,
-                f"{THEME_COLORS_PATH_ENV} must not be empty",
+                SettingsValidationError,
+                f"{THEME_COLORS_PATH_ENV}: must not be empty",
             ),
         ):
             load_theme_colors()
