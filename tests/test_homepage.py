@@ -120,16 +120,35 @@ class HomepageTests(TestCase):
         self.assertEqual(copyable_featured.clipboard_text, "https://example.com")
 
     def test_homepage_replaces_github_metadata_with_the_repository_count(self) -> None:
+        fallback_metadata = _github_fallback_metadata()
+        repository_count = 30 if fallback_metadata != "30 Repositories" else 31
+        expected_metadata = f"{repository_count} Repositories"
+
         async def fetch_count(login: str) -> int:
             self.assertEqual(login, "apasz")
+            return repository_count
+
+        cache = GithubRepositoryCountCache(fetch_count)
+        asyncio.run(cache.refresh("APasz"))
+        document = render(asyncio.run(homepage(cache)))
+
+        self.assertIn(expected_metadata, document)
+        self.assertNotIn(fallback_metadata, document)
+
+    def test_homepage_does_not_trigger_a_github_refresh(self) -> None:
+        calls: list[str] = []
+        fallback_metadata = _github_fallback_metadata()
+
+        async def fetch_count(login: str) -> int:
+            calls.append(login)
             return 30
 
         document = render(
             asyncio.run(homepage(GithubRepositoryCountCache(fetch_count)))
         )
 
-        self.assertIn("30 Repositories", document)
-        self.assertNotIn("29 Repositories", document)
+        self.assertIn(fallback_metadata, document)
+        self.assertEqual(calls, [])
 
     def test_cards_render_their_declared_presentation(self) -> None:
         cards = load_link_cards()
@@ -230,3 +249,17 @@ async def _unavailable_repository_count(_: str) -> int:
 
 def _repository_count_cache() -> GithubRepositoryCountCache:
     return GithubRepositoryCountCache(_unavailable_repository_count)
+
+
+def _github_fallback_metadata() -> str:
+    """Return the configured fallback for the GitHub card under test."""
+
+    for card in load_link_cards():
+        if card.schema is not CardKind.GITHUB:
+            continue
+        if card.metadata is None:
+            raise AssertionError(
+                "The configured GitHub card must have fallback metadata."
+            )
+        return card.metadata
+    raise AssertionError("The configured link cards must include a GitHub card.")

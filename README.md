@@ -38,9 +38,10 @@ links open in a new tab by default
 and `github` requires a canonical `https://github.com/<login>` profile URL
 Clipboard actions require `copy_to_clipboard: true` and a non-empty `copy_text`; they can be used with any card tier or schema
 
-GitHub cards refresh their public repository count server-side every 18 hours.
-The refreshed value replaces `metadata`; configured metadata remains the fallback
-when GitHub is unavailable.
+GitHub cards refresh their public repository count in a background task when the
+server starts and then every 18 hours. Homepage visits only use the last
+refreshed value. Configured metadata is used until the first successful refresh;
+the last successful value remains visible through a temporary GitHub failure.
 
 For deployment, `APASZ_HUB_LINK_CARDS_PATH` can select another card file
 Use an absolute path in persistent writable storage; it is also reloaded per request

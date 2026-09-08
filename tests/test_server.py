@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
-from unittest import TestCase
-from unittest.mock import patch
+from typing import cast
+from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, Mock, patch
 
+from starlette.types import Message, Scope
+
+import apasz_hub.app as application
 from apasz_hub import framework
 
 
@@ -52,3 +57,44 @@ class ServerTests(TestCase):
             self.assertRaisesRegex(ValueError, "PORT must be an integer"),
         ):
             framework.serve_development("main")
+
+
+class AppLifecycleTests(IsolatedAsyncioTestCase):
+    """Keep the GitHub refresher attached to the ASGI application lifecycle."""
+
+    async def test_lifespan_starts_and_stops_the_github_refresher(self) -> None:
+        received: asyncio.Queue[Message] = asyncio.Queue()
+        sent: list[Message] = []
+        startup_complete = asyncio.Event()
+        refresher = Mock()
+        refresher.stop = AsyncMock()
+
+        async def receive() -> Message:
+            return await received.get()
+
+        async def send(message: Message) -> None:
+            sent.append(message)
+            if message["type"] == "lifespan.startup.complete":
+                startup_complete.set()
+
+        scope = cast(
+            Scope,
+            {
+                "type": "lifespan",
+                "asgi": {"version": "3.0", "spec_version": "2.0"},
+                "state": {},
+            },
+        )
+        with patch.object(application, "GITHUB_REPOSITORY_REFRESHER", refresher):
+            lifespan = asyncio.create_task(application.app(scope, receive, send))
+            await received.put({"type": "lifespan.startup"})
+            await asyncio.wait_for(startup_complete.wait(), timeout=1)
+            await received.put({"type": "lifespan.shutdown"})
+            await asyncio.wait_for(lifespan, timeout=1)
+
+        refresher.start.assert_called_once_with()
+        refresher.stop.assert_awaited_once_with()
+        self.assertEqual(
+            [message["type"] for message in sent],
+            ["lifespan.startup.complete", "lifespan.shutdown.complete"],
+        )

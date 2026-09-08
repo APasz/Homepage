@@ -28,6 +28,7 @@ class HtmlNode:
 type HtmlChild = HtmlNode | str
 type RouteHandler = Callable[[], Awaitable[HtmlNode]]
 type RouteDecorator = Callable[[RouteHandler], RouteHandler]
+type LifecycleHook = Callable[[], Awaitable[None]]
 
 
 class Component(Protocol):
@@ -58,7 +59,13 @@ class FastHTMLApp(Protocol):
         ...
 
 
-def create_app(*, title: str, headers: tuple[HtmlNode, ...]) -> FastHTMLApp:
+def create_app(
+    *,
+    title: str,
+    headers: tuple[HtmlNode, ...],
+    on_startup: LifecycleHook | None = None,
+    on_shutdown: LifecycleHook | None = None,
+) -> FastHTMLApp:
     """Create the small FastHTML application shell."""
 
     return cast(
@@ -66,6 +73,8 @@ def create_app(*, title: str, headers: tuple[HtmlNode, ...]) -> FastHTMLApp:
         fh.FastHTML(
             title=title,
             hdrs=headers,
+            on_startup=on_startup,
+            on_shutdown=on_shutdown,
             default_hdrs=False,
             htmx=False,
             surreal=False,
