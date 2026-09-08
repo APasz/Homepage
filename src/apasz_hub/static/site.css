@@ -388,13 +388,6 @@ textarea:focus-visible {
     letter-spacing: -0.02em;
 }
 
-.link-card-manager__description {
-    max-width: 38rem;
-    margin: 0.35rem 0 0;
-    color: var(--color-muted);
-    font-size: 0.86rem;
-}
-
 .link-card-manager__list {
     border-top: 1px solid var(--color-border);
 }
@@ -471,6 +464,32 @@ textarea:focus-visible {
     font-size: 0.62rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+}
+
+.link-card-manager__delete {
+    display: none;
+    min-height: 1.55rem;
+    align-items: center;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-raised);
+    color: var(--color-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.link-card-manager__card[open] .link-card-manager__delete {
+    display: inline-flex;
+}
+
+.link-card-manager__delete:hover,
+.link-card-manager__delete:focus-visible {
+    border-color: var(--color-accent);
+    color: var(--color-text);
 }
 
 .link-card-panel {
@@ -765,7 +784,8 @@ textarea:focus-visible {
     color: var(--color-muted);
 }
 
-.link-card-actions {
+.link-card-actions,
+.config-actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -892,23 +912,13 @@ textarea:focus-visible {
     border: 0;
 }
 
-.config-actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: clamp(1rem, 2.5vw, 1.5rem);
-    border-top: 1px solid var(--color-border);
-    background: var(--color-surface-raised);
-}
-
 .config-status {
     margin: 0;
     color: var(--color-subtle);
     font-size: 0.68rem;
 }
 
-.config-buttons {
+.action-buttons {
     display: flex;
     gap: 0.55rem;
 }
@@ -1017,6 +1027,7 @@ a.site-nav__link:focus-visible {
         grid-template-columns: 1fr;
     }
 
+    .link-card-actions,
     .config-actions {
         align-items: flex-start;
         flex-direction: column;
@@ -1059,11 +1070,6 @@ a.site-nav__link:focus-visible {
 
     .icon-picker {
         width: calc(100vw - 1.25rem);
-    }
-
-    .link-card-actions {
-        align-items: flex-start;
-        flex-direction: column;
     }
 
     .site-footer {

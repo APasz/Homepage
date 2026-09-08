@@ -109,6 +109,9 @@ class LinkCardFormField(StrEnum):
     ICON_HOVER_AUTO = "icon_hover_auto"
 
 
+LINK_CARD_DELETE_INDEX_FORM_NAME: Final = "link-card-delete-index"
+
+
 @dataclass(frozen=True, slots=True)
 class LinkCardColourControl:
     """Configuration metadata for one optional LinkCard colour override."""
@@ -342,6 +345,12 @@ DEFAULT_LINK_CARDS_PATH: Final = Path(__file__).with_name("link_cards.json")
 LINK_CARDS_PATH_ENV: Final = "APASZ_HUB_LINK_CARDS_PATH"
 ICON_DIRECTORY: Final = Path(__file__).with_name("static") / "icons"
 ICON_URL_PREFIX: Final = "/static/icons"
+DEFAULT_NEW_LINK_CARD: Final = LinkCard(
+    title="New Link",
+    href="https://example.com",
+    tier=CardTier.STANDARD,
+    icon=f"{ICON_URL_PREFIX}/github.svg",
+)
 
 _REQUIRED_CARD_FIELDS: Final = ("title", "href", "tier", "icon")
 _OPTIONAL_CARD_FIELDS: Final = frozenset(_LinkCardOptions.__annotations__)
@@ -436,8 +445,13 @@ def link_card_form_destination(card: LinkCard, schema: CardKind) -> str:
 def link_card_draft_from_form(
     values: Mapping[str, object],
     source_cards: tuple[LinkCard, ...],
+    *,
+    excluded_index: int | None = None,
 ) -> tuple[LinkCard, ...]:
-    """Validate complete form data and produce the next editable card draft."""
+    """Validate editor data and return the next draft, optionally omitting a card."""
+
+    if excluded_index is not None:
+        _validate_link_card_draft_index(excluded_index, source_cards)
 
     expected_names: set[str] = set()
     draft_cards: list[LinkCard] = []
@@ -446,6 +460,8 @@ def link_card_draft_from_form(
             field: link_card_form_name(index, field) for field in LinkCardFormField
         }
         expected_names.update(field_names.values())
+        if index == excluded_index:
+            continue
         draft_cards.append(
             _link_card_from_form_fields(
                 values,
@@ -460,6 +476,18 @@ def link_card_draft_from_form(
             f"Link-card draft has unsupported field(s): {', '.join(unknown_names)}."
         )
     return tuple(draft_cards)
+
+
+def _validate_link_card_draft_index(
+    index: int,
+    cards: tuple[LinkCard, ...],
+) -> None:
+    """Ensure an index identifies one card in a draft snapshot."""
+
+    if type(index) is not int:
+        raise LinkCardDataError("Link-card draft index must be an integer.")
+    if index < 0 or index >= len(cards):
+        raise LinkCardDataError(f"Link-card draft index {index} is out of range.")
 
 
 class LinkCardStore:
@@ -527,10 +555,48 @@ class LinkCardStore:
                 "Link-card draft changed elsewhere; reload the configuration page."
             )
         cards = link_card_draft_from_form(values, source_cards)
-        if cards != source_cards:
-            self._draft_cards = cards
-            self._draft_revision += 1
-        return cards
+        return self._replace_draft_if_changed(source_cards, cards)
+
+    def add_draft_card(self) -> tuple[LinkCard, ...]:
+        """Append a valid default card to the editable, unpublished draft."""
+
+        source_cards = self.draft_cards()
+        cards = (*source_cards, DEFAULT_NEW_LINK_CARD)
+        return self._replace_draft_if_changed(source_cards, cards)
+
+    def add_draft_card_from_form(
+        self,
+        values: Mapping[str, object],
+    ) -> tuple[LinkCard, ...]:
+        """Apply valid form edits while atomically appending a default card."""
+
+        source_cards = self.draft_cards()
+        draft_cards = link_card_draft_from_form(values, source_cards)
+        cards = (*draft_cards, DEFAULT_NEW_LINK_CARD)
+        return self._replace_draft_if_changed(source_cards, cards)
+
+    def delete_draft_card(self, index: int) -> tuple[LinkCard, ...]:
+        """Remove one card from the editable, unpublished draft."""
+
+        source_cards = self.draft_cards()
+        _validate_link_card_draft_index(index, source_cards)
+        cards = source_cards[:index] + source_cards[index + 1 :]
+        return self._replace_draft_if_changed(source_cards, cards)
+
+    def delete_draft_card_from_form(
+        self,
+        values: Mapping[str, object],
+        index: int,
+    ) -> tuple[LinkCard, ...]:
+        """Apply valid remaining form edits while atomically discarding one card."""
+
+        source_cards = self.draft_cards()
+        cards = link_card_draft_from_form(
+            values,
+            source_cards,
+            excluded_index=index,
+        )
+        return self._replace_draft_if_changed(source_cards, cards)
 
     def save_draft(self) -> tuple[LinkCard, ...]:
         """Persist the draft and make it the homepage's published snapshot."""
@@ -546,6 +612,18 @@ class LinkCardStore:
 
         if self._published_cards is None or self._draft_cards is None:
             self.load()
+
+    def _replace_draft_if_changed(
+        self,
+        source_cards: tuple[LinkCard, ...],
+        draft_cards: tuple[LinkCard, ...],
+    ) -> tuple[LinkCard, ...]:
+        """Store a changed draft snapshot and advance its revision once."""
+
+        if draft_cards != source_cards:
+            self._draft_cards = draft_cards
+            self._draft_revision += 1
+        return draft_cards
 
 
 def cards_for_tier(cards: tuple[LinkCard, ...], tier: CardTier) -> tuple[LinkCard, ...]:

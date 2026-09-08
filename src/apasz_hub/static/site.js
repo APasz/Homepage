@@ -264,6 +264,9 @@ function configureLinkCardControls() {
             control instanceof HTMLSelectElement ||
             control instanceof HTMLTextAreaElement,
     );
+    const deleteButtons = [
+        ...form.querySelectorAll("button[data-link-card-delete]"),
+    ].filter((button) => button instanceof HTMLButtonElement);
     let draftTimer = 0;
     let inputRevision = 0;
     let draftStoreRevision = Number.parseInt(
@@ -416,7 +419,7 @@ function configureLinkCardControls() {
             draftStoreRevision = nextStoreRevision;
             form.dataset.linkCardDraftRevision = String(nextStoreRevision);
             if (requestRevision === inputRevision) {
-                report("Draft updated. Save link cards to publish.");
+                report("Draft updated. Save Links to publish.");
             }
         } catch (error) {
             if (requestRevision === inputRevision) {
@@ -437,6 +440,12 @@ function configureLinkCardControls() {
     configureDestinationControls();
     configureColourControls();
 
+    for (const deleteButton of deleteButtons) {
+        deleteButton.addEventListener("click", (event) => {
+            event.stopPropagation();
+        });
+    }
+
     for (const control of controls) {
         const updateDraft = () => {
             updateCardSummary(control);
@@ -448,9 +457,22 @@ function configureLinkCardControls() {
         control.addEventListener("change", updateDraft);
     }
 
-    form.addEventListener("submit", () => {
+    form.addEventListener("submit", (event) => {
         window.clearTimeout(draftTimer);
-        report("Saving link cards…");
+        const submitter = event.submitter;
+        if (
+            submitter instanceof HTMLButtonElement &&
+            submitter.dataset.linkCardAdd !== undefined
+        ) {
+            report("Adding link…");
+        } else if (
+            submitter instanceof HTMLButtonElement &&
+            submitter.dataset.linkCardDelete !== undefined
+        ) {
+            report("Deleting link…");
+        } else {
+            report("Saving link cards…");
+        }
     });
 }
 

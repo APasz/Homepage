@@ -29,6 +29,7 @@ from apasz_hub.data import (
     FAVICON_URL,
     LINK_CARD_COLOUR_CONTROL_PAIRS,
     LINK_CARD_COLOUR_CONTROLS,
+    LINK_CARD_DELETE_INDEX_FORM_NAME,
     PROFILE_IMAGE_URL,
     PROFILE_REDUCED_MOTION_IMAGE_URL,
     SITE_SCRIPT_URL,
@@ -132,7 +133,12 @@ class HomepageTests(TestCase):
         self.assertIn('data-link-card-draft-url="/config/link-cards/draft"', document)
         self.assertIn('data-link-card-draft-revision="0"', document)
         self.assertIn('action="/config/link-cards"', document)
-        self.assertIn("Save link cards", document)
+        self.assertIn('formaction="/config/link-cards/add"', document)
+        self.assertIn('formaction="/config/link-cards/delete"', document)
+        self.assertIn("Add Link", document)
+        self.assertIn("Save Links", document)
+        self.assertEqual(document.count('data-link-card-delete=""'), len(cards))
+        self.assertEqual(document.count('formnovalidate=""'), len(cards))
         for card in cards:
             self.assertIn(card.title, document)
         for index, card in enumerate(cards):
@@ -403,7 +409,12 @@ class HomepageTests(TestCase):
         self.assertIn("function configureLinkCardControls", script)
         self.assertIn("function configureColourControls", script)
         self.assertIn("function updateAutomaticLinkCardColours", script)
-        self.assertIn("Draft updated. Save link cards to publish.", script)
+        self.assertIn("Draft updated. Save Links to publish.", script)
+        self.assertIn("data-link-card-delete", script)
+        self.assertIn(
+            ".link-card-manager__card[open] .link-card-manager__delete",
+            stylesheet,
+        )
         self.assertTrue((STATIC_DIRECTORY / "media" / "pfp-anim.webp").is_file())
         self.assertTrue(
             (STATIC_DIRECTORY / WORDMARK_URL.removeprefix("/static/")).is_file()
@@ -545,16 +556,102 @@ class HomepageTests(TestCase):
         self.assertIn(original_title, published_before_save.text)
         self.assertNotIn(draft_title, published_before_save.text)
         self.assertIn(draft_title, config_draft.text)
-        self.assertIn("Draft changes are not live until saved.", config_draft.text)
+        self.assertIn("Draft changes", config_draft.text)
         self.assertEqual(save_response.status_code, 303)
         self.assertEqual(
             save_response.headers["location"],
             f"{SitePage.CONFIG.value}?link_cards_saved=1",
         )
-        self.assertIn("Link cards saved.", saved_config.text)
+        self.assertIn("Link cards saved", saved_config.text)
         self.assertIn(draft_title, published_after_save.text)
         self.assertEqual(saved_cards[0].title, draft_title)
         self.assertFalse(store.is_draft_dirty)
+
+    def test_add_link_card_adds_an_unpublished_draft_entry(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            original_document = DEFAULT_LINK_CARDS_PATH.read_text(encoding="utf-8")
+            path.write_text(original_document, encoding="utf-8")
+            store = LinkCardStore(path)
+            store.load()
+            original_cards = store.draft_cards()
+            values = link_card_form_values(original_cards)
+            updated_title = "Updated first link"
+            values[link_card_form_name(0, LinkCardFormField.TITLE)] = updated_title
+
+            async def add_link_card() -> tuple[httpx.Response, httpx.Response]:
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                ) as client:
+                    add_response = await client.post(
+                        SitePage.CONFIG_LINK_CARDS_ADD.value,
+                        data=values,
+                        follow_redirects=False,
+                    )
+                    config_response = await client.get(add_response.headers["location"])
+                    return add_response, config_response
+
+            with patch.object(application, "LINK_CARD_STORE", store):
+                add_response, config_response = asyncio.run(add_link_card())
+            draft_document = path.read_text(encoding="utf-8")
+
+        self.assertEqual(add_response.status_code, 303)
+        self.assertEqual(add_response.headers["location"], SitePage.CONFIG.value)
+        self.assertEqual(len(store.draft_cards()), len(original_cards) + 1)
+        self.assertEqual(store.draft_cards()[0].title, updated_title)
+        self.assertEqual(store.draft_cards()[-1].title, "New Link")
+        self.assertEqual(store.published_cards(), original_cards)
+        self.assertEqual(draft_document, original_document)
+        self.assertIn(updated_title, config_response.text)
+        self.assertIn("New Link", config_response.text)
+        self.assertIn("Draft changes", config_response.text)
+
+    def test_delete_link_card_removes_an_unpublished_draft_entry(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            original_document = DEFAULT_LINK_CARDS_PATH.read_text(encoding="utf-8")
+            path.write_text(original_document, encoding="utf-8")
+            store = LinkCardStore(path)
+            store.load()
+            original_cards = store.draft_cards()
+            values = link_card_form_values(original_cards)
+            updated_title = "Updated first link"
+            values[link_card_form_name(0, LinkCardFormField.TITLE)] = updated_title
+            values[link_card_form_name(1, LinkCardFormField.DESTINATION)] = ""
+            values[LINK_CARD_DELETE_INDEX_FORM_NAME] = "1"
+
+            async def delete_link_card() -> tuple[httpx.Response, httpx.Response]:
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                ) as client:
+                    delete_response = await client.post(
+                        SitePage.CONFIG_LINK_CARDS_DELETE.value,
+                        data=values,
+                        follow_redirects=False,
+                    )
+                    config_response = await client.get(
+                        delete_response.headers["location"]
+                    )
+                    return delete_response, config_response
+
+            with patch.object(application, "LINK_CARD_STORE", store):
+                delete_response, config_response = asyncio.run(delete_link_card())
+            draft_document = path.read_text(encoding="utf-8")
+
+        self.assertEqual(delete_response.status_code, 303)
+        self.assertEqual(delete_response.headers["location"], SitePage.CONFIG.value)
+        self.assertEqual(len(store.draft_cards()), len(original_cards) - 1)
+        self.assertEqual(store.draft_cards()[0].title, updated_title)
+        self.assertEqual(store.draft_cards()[1:], original_cards[2:])
+        self.assertEqual(store.published_cards(), original_cards)
+        self.assertEqual(draft_document, original_document)
+        self.assertIn(updated_title, config_response.text)
+        self.assertNotIn(original_cards[1].title, config_response.text)
+        self.assertIn("Draft changes", config_response.text)
 
     def test_link_card_draft_rejects_invalid_submission_without_mutating_state(
         self,
@@ -632,7 +729,7 @@ class HomepageTests(TestCase):
         )
         self.assertIn('value="#123456"', config_response.text)
         self.assertIn('meta name="theme-color" content="#123456"', config_response.text)
-        self.assertIn("Colours saved.", config_response.text)
+        self.assertIn("Colours saved", config_response.text)
         self.assertIn("--color-canvas: #123456;", theme_response.text)
         self.assertEqual(
             next(

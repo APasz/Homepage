@@ -9,6 +9,7 @@ from typing import Final
 from apasz_hub.components import ButtonStyle, button_class, link_card, utility_link
 from apasz_hub.data import (
     LINK_CARD_COLOUR_CONTROL_PAIRS,
+    LINK_CARD_DELETE_INDEX_FORM_NAME,
     LINK_CARD_DESTINATION_SPECS,
     PROFILE_IMAGE_URL,
     PROFILE_REDUCED_MOTION_IMAGE_URL,
@@ -69,6 +70,8 @@ class SitePage(StrEnum):
     CONFIG = "/config"
     CONFIG_COLOURS_SAVE = "/config/colours"
     CONFIG_LINK_CARDS_DRAFT = "/config/link-cards/draft"
+    CONFIG_LINK_CARDS_ADD = "/config/link-cards/add"
+    CONFIG_LINK_CARDS_DELETE = "/config/link-cards/delete"
     CONFIG_LINK_CARDS_SAVE = "/config/link-cards"
 
 
@@ -144,11 +147,7 @@ def configuration_page(
 ) -> HtmlNode:
     """Build the persisted palette and in-memory LinkCard draft controls."""
 
-    colour_status = (
-        "Colours saved."
-        if colours_saved
-        else "Changes preview immediately. Save them when ready."
-    )
+    colour_status = "Colours saved" if colours_saved else "Colourate"
 
     return Main(
         Header(
@@ -192,7 +191,7 @@ def configuration_page(
                             type="submit",
                             cls=button_class(ButtonStyle.ALPHA),
                         ),
-                        cls="config-buttons",
+                        cls="action-buttons",
                     ),
                     cls="config-actions",
                 ),
@@ -259,22 +258,15 @@ def _link_card_manager(
 ) -> HtmlNode:
     """Render expandable controls for the in-memory LinkCard draft."""
 
-    status = (
-        "Link cards saved."
-        if saved
-        else "Draft changes are not live until saved."
-        if dirty
-        else "Edit the draft, then save it to publish the changes."
-    )
+    if saved:
+        status = "Link cards saved"
+    elif dirty:
+        status = "Draft changes"
+    else:
+        status = "Linkerate"
     return Section(
         Div(
             H2("Link cards", cls="link-card-manager__title"),
-            P(
-                "Edits update an in-memory draft. Save link cards to publish the "
-                "draft and write it to JSON. Use Auto to inherit shared colours or "
-                "choose per-card border and icon overrides.",
-                cls="link-card-manager__description",
-            ),
             cls="link-card-manager__header",
         ),
         Form(
@@ -292,10 +284,20 @@ def _link_card_manager(
                     data_link_card_status="",
                     cls="link-card-status",
                 ),
-                Button(
-                    "Save link cards",
-                    type="submit",
-                    cls=button_class(ButtonStyle.ALPHA),
+                Div(
+                    Button(
+                        "Add Link",
+                        type="submit",
+                        formaction=SitePage.CONFIG_LINK_CARDS_ADD.value,
+                        data_link_card_add="",
+                        cls=button_class(ButtonStyle.BETA),
+                    ),
+                    Button(
+                        "Save Links",
+                        type="submit",
+                        cls=button_class(ButtonStyle.ALPHA),
+                    ),
+                    cls="action-buttons",
                 ),
                 cls="link-card-actions",
             ),
@@ -370,6 +372,17 @@ def _link_card_manager_card(
                     card.schema.value,
                     data_link_card_summary=LinkCardFormField.SCHEMA.value,
                     cls="link-card-manager__schema",
+                ),
+                Button(
+                    "Delete",
+                    type="submit",
+                    formaction=SitePage.CONFIG_LINK_CARDS_DELETE.value,
+                    formnovalidate="",
+                    name=LINK_CARD_DELETE_INDEX_FORM_NAME,
+                    value=str(index),
+                    aria_label=f"Delete {card.title}",
+                    data_link_card_delete="",
+                    cls="link-card-manager__delete",
                 ),
                 cls="link-card-manager__meta",
             ),

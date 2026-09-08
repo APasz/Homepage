@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -11,6 +12,7 @@ from starlette.responses import RedirectResponse, Response
 
 from apasz_hub.components import document_headers, theme_color_meta
 from apasz_hub.data import (
+    LINK_CARD_DELETE_INDEX_FORM_NAME,
     SITE,
     LinkCardDataError,
     LinkCardDraftConflictError,
@@ -140,6 +142,31 @@ async def update_link_card_draft(request: Request) -> Response:
     )
 
 
+@app.post(SitePage.CONFIG_LINK_CARDS_ADD.value)
+async def add_link_card(request: Request) -> RedirectResponse:
+    """Apply current edits and append an unpublished LinkCard draft entry."""
+
+    try:
+        LINK_CARD_STORE.add_draft_card_from_form(await request.form())
+    except LinkCardDataError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return RedirectResponse(SitePage.CONFIG.value, status_code=303)
+
+
+@app.post(SitePage.CONFIG_LINK_CARDS_DELETE.value)
+async def delete_link_card(request: Request) -> RedirectResponse:
+    """Apply current edits and remove one unpublished LinkCard draft entry."""
+
+    form_values = dict(await request.form())
+    try:
+        index = _link_card_delete_index(form_values)
+        form_values.pop(LINK_CARD_DELETE_INDEX_FORM_NAME)
+        LINK_CARD_STORE.delete_draft_card_from_form(form_values, index)
+    except LinkCardDataError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return RedirectResponse(SitePage.CONFIG.value, status_code=303)
+
+
 @app.post(SitePage.CONFIG_LINK_CARDS_SAVE.value)
 async def save_link_card_draft(request: Request) -> RedirectResponse:
     """Persist the submitted in-memory LinkCard draft and publish it."""
@@ -170,6 +197,21 @@ def _link_card_draft_revision(request: Request) -> int | None:
     if revision < 0:
         raise LinkCardDataError("Link-card draft revision must not be negative.")
     return revision
+
+
+def _link_card_delete_index(values: Mapping[str, object]) -> int:
+    """Read the non-negative draft-card index selected for deletion."""
+
+    value = values.get(LINK_CARD_DELETE_INDEX_FORM_NAME)
+    if not isinstance(value, str):
+        raise LinkCardDataError("Link-card delete request must identify a card.")
+    try:
+        index = int(value)
+    except ValueError as error:
+        raise LinkCardDataError("Link-card delete index must be an integer.") from error
+    if index < 0:
+        raise LinkCardDataError("Link-card delete index must not be negative.")
+    return index
 
 
 @app.get(THEME_STYLESHEET_URL)

@@ -298,6 +298,107 @@ class LinkCardDataTests(TestCase):
         self.assertEqual(after_save[0].title, "Draft destination")
         self.assertEqual(after_save[0].border_hover, "#123456")
 
+    def test_store_adds_an_unpublished_default_card(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            _write_cards(path, [_card("Published destination")])
+            store = LinkCardStore(path)
+            published_cards = store.load()
+            draft_revision = store.draft_revision
+
+            draft_cards = store.add_draft_card()
+
+        added_card = draft_cards[-1]
+        self.assertEqual(draft_cards[:-1], published_cards)
+        self.assertEqual(added_card.title, "New Link")
+        self.assertEqual(added_card.href, "https://example.com")
+        self.assertIs(added_card.tier, CardTier.STANDARD)
+        self.assertEqual(added_card.icon, "/static/icons/github.svg")
+        self.assertEqual(store.published_cards(), published_cards)
+        self.assertTrue(store.is_draft_dirty)
+        self.assertEqual(store.draft_revision, draft_revision + 1)
+
+    def test_store_adds_a_card_from_form_in_one_draft_revision(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            _write_cards(path, [_card("Published destination")])
+            store = LinkCardStore(path)
+            published_cards = store.load()
+            draft_revision = store.draft_revision
+            values = link_card_form_values(published_cards)
+            values[link_card_form_name(0, LinkCardFormField.TITLE)] = "Changed"
+
+            draft_cards = store.add_draft_card_from_form(values)
+
+        self.assertEqual(draft_cards[0].title, "Changed")
+        self.assertEqual(draft_cards[-1].title, "New Link")
+        self.assertEqual(store.draft_revision, draft_revision + 1)
+
+    def test_store_deletes_an_unpublished_card(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            _write_cards(
+                path,
+                [_card("First destination"), _card("Second destination")],
+            )
+            store = LinkCardStore(path)
+            published_cards = store.load()
+            draft_revision = store.draft_revision
+
+            draft_cards = store.delete_draft_card(0)
+
+        self.assertEqual(draft_cards, (published_cards[1],))
+        self.assertEqual(store.published_cards(), published_cards)
+        self.assertTrue(store.is_draft_dirty)
+        self.assertEqual(store.draft_revision, draft_revision + 1)
+        with self.assertRaisesRegex(LinkCardDataError, "index 1"):
+            store.delete_draft_card(1)
+
+    def test_store_deletes_an_invalid_target_card_from_form(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            _write_cards(
+                path,
+                [_card("First destination"), _card("Second destination")],
+            )
+            store = LinkCardStore(path)
+            published_cards = store.load()
+            values = link_card_form_values(published_cards)
+            values[link_card_form_name(1, LinkCardFormField.DESTINATION)] = ""
+
+            draft_cards = store.delete_draft_card_from_form(values, 1)
+
+        self.assertEqual(draft_cards, (published_cards[0],))
+        self.assertEqual(store.published_cards(), published_cards)
+        self.assertTrue(store.is_draft_dirty)
+
+    def test_store_rejects_an_invalid_form_deletion_without_mutating_draft(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            _write_cards(path, [_card("Published destination")])
+            store = LinkCardStore(path)
+            published_cards = store.load()
+            values = link_card_form_values(published_cards)
+            values[link_card_form_name(0, LinkCardFormField.TITLE)] = "Changed"
+
+            with self.assertRaisesRegex(LinkCardDataError, "index 1"):
+                store.delete_draft_card_from_form(values, 1)
+
+        self.assertEqual(store.draft_cards(), published_cards)
+        self.assertEqual(store.published_cards(), published_cards)
+
+    def test_store_rejects_a_negative_delete_index(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            _write_cards(path, [_card("Published destination")])
+            store = LinkCardStore(path)
+            store.load()
+
+            with self.assertRaisesRegex(LinkCardDataError, "index -1"):
+                store.delete_draft_card(-1)
+
     def test_store_rejects_an_outdated_draft_update(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "link_cards.json"
