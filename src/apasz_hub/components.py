@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from json import dumps
 
-from apasz_hub.data import FAVICON_URL, SITE, SITE_SCRIPT_URL, LinkCard, SiteMetadata
+from apasz_hub.data import (
+    FAVICON_URL,
+    SITE,
+    SITE_SCRIPT_URL,
+    SITE_STYLESHEET_URL,
+    LinkCard,
+    SiteMetadata,
+)
 from apasz_hub.framework import (
     H2,
     A,
@@ -17,16 +25,34 @@ from apasz_hub.framework import (
     Script,
     Span,
 )
+from apasz_hub.theme import (
+    THEME_STYLESHEET_URL,
+    ThemeColors,
+    ThemeColorToken,
+    theme_color,
+)
+
+
+class ButtonStyle(StrEnum):
+    """Named shared button treatments built on the secondary palette."""
+
+    ALPHA = "alpha"
+    BETA = "beta"
+
+
+def button_class(style: ButtonStyle) -> str:
+    """Return the reusable secondary-style classes for one button treatment."""
+
+    return f"action-button action-button--secondary action-button--{style.value}"
 
 
 def document_headers(metadata: SiteMetadata = SITE) -> tuple[HtmlNode, ...]:
-    """Build stable document metadata."""
+    """Build document metadata shared by every rendered page."""
 
     return (
         Meta(charset="utf-8"),
         Meta(name="viewport", content="width=device-width, initial-scale=1"),
         Meta(name="description", content=metadata.description),
-        Meta(name="theme-color", content="#000000"),
         Meta(property="og:type", content="website"),
         Meta(property="og:site_name", content=metadata.title),
         Meta(property="og:title", content=metadata.title),
@@ -37,8 +63,20 @@ def document_headers(metadata: SiteMetadata = SITE) -> tuple[HtmlNode, ...]:
         Meta(name="twitter:description", content=metadata.description),
         Link(rel="canonical", href=metadata.canonical_url),
         Link(rel="icon", type="image/png", sizes="64x64", href=FAVICON_URL),
-        Link(rel="stylesheet", href="/static/site.css"),
+        Link(rel="stylesheet", href=THEME_STYLESHEET_URL),
+        Link(rel="stylesheet", href=SITE_STYLESHEET_URL),
         Script(src=SITE_SCRIPT_URL, defer=""),
+    )
+
+
+def theme_color_meta(colors: ThemeColors) -> HtmlNode:
+    """Build a request-fresh browser-chrome colour declaration."""
+
+    canvas = theme_color(colors, ThemeColorToken.CANVAS)
+    return Meta(
+        name="theme-color",
+        content=canvas.value,
+        data_theme_color_token=ThemeColorToken.CANVAS.value,
     )
 
 

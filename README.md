@@ -24,8 +24,10 @@ uv run python -m unittest discover -s tests -v
 
 ## Link cards
 
-Edit `src/apasz_hub/link_cards.json` to update homepage destinations
-The file is validated and reloaded for every homepage request, so valid changes don't need a server restart
+Link cards are loaded and validated once when the server starts. Visit `/config`
+to edit its in-memory draft; **Save link cards** atomically writes the draft to
+`src/apasz_hub/link_cards.json` and publishes it to the homepage. External JSON
+changes require a server restart to be picked up.
 
 Each card requires `title`, `href`, `tier`, and `icon`
 `tier` is `featured`, `standard`, or `utility`
@@ -34,9 +36,30 @@ Optional fields are `description`, `border_hover`, `border_static`, `icon_static
 Featured cards require `metadata`
 `icon_scale` is a positive integer and defaults to `100`;
 links open in a new tab by default
-`schema` defaults to `normal`; `mail` requires a non-empty `mailto:` destination
-and `github` requires a canonical `https://github.com/<login>` profile URL
+`schema` defaults to `normal`; `mail` requires a `mailto:` destination with an
+email address and `github` requires a canonical `https://github.com/<login>`
+profile URL
 Clipboard actions require `copy_to_clipboard: true` and a non-empty `copy_text`; they can be used with any card tier or schema
+
+The config editor presents a schema-specific destination field: normal cards use
+a full URL, GitHub cards use only a username, and email cards use only an email
+address. The latter two are converted to their canonical `href` values when
+the draft is saved.
+
+## Appearance
+
+Shared interface colours are stored in `src/apasz_hub/theme_colors.json` and
+supplied to the site through `/theme.css`. Visit `/config` to preview changes,
+then use **Save colours** to persist the JSON file. Reset discards unsaved edits.
+
+For deployment, set `APASZ_HUB_THEME_COLORS_PATH` to a persistent writable JSON
+file rather than the packaged default.
+
+Link-card border and icon colours can be overridden from `/config`. Leave Auto
+enabled to inherit the matching shared palette colour; custom overrides persist
+with the LinkCard JSON data.
+
+## GitHub card metadata
 
 GitHub cards refresh their public repository count in a background task when the
 server starts and then every 18 hours. Homepage visits only use the last
@@ -44,7 +67,7 @@ refreshed value. Configured metadata is used until the first successful refresh;
 the last successful value remains visible through a temporary GitHub failure.
 
 For deployment, `APASZ_HUB_LINK_CARDS_PATH` can select another card file
-Use an absolute path in persistent writable storage; it is also reloaded per request
+Use an absolute path in persistent writable storage
 
 ## Production
 
@@ -72,6 +95,8 @@ Configure HSTS at the TLS-terminating proxy or CDN
 
 Add SVGs to `src/apasz_hub/static/icons/`, then crop their canvases with
 Inkscape:
+
+The config page automatically lists these SVGs in the LinkCard icon picker.
 
 ```bash
 uv run python tools/crop_svg_icons.py

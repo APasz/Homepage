@@ -1,9 +1,11 @@
-"""Public behavior checks for the single-page hub."""
+"""Public behavior checks for the hub pages and their configuration."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -14,16 +16,30 @@ try:
 except ModuleNotFoundError:
     uvloop = None
 
+import apasz_hub.app as application
 from apasz_hub.app import STATIC_DIRECTORY, app
-from apasz_hub.components import document_headers, link_card, utility_link
+from apasz_hub.components import (
+    document_headers,
+    link_card,
+    theme_color_meta,
+    utility_link,
+)
 from apasz_hub.data import (
+    DEFAULT_LINK_CARDS_PATH,
     FAVICON_URL,
+    LINK_CARD_COLOUR_CONTROL_PAIRS,
+    LINK_CARD_COLOUR_CONTROLS,
     PROFILE_IMAGE_URL,
     PROFILE_REDUCED_MOTION_IMAGE_URL,
     SITE_SCRIPT_URL,
+    SITE_STYLESHEET_URL,
     WORDMARK_URL,
     CardKind,
     CardTier,
+    LinkCardFormField,
+    LinkCardStore,
+    link_card_form_name,
+    load_icon_assets,
     load_link_cards,
 )
 from apasz_hub.framework import render
@@ -32,11 +48,21 @@ from apasz_hub.github import (
     GithubRepositoryCountUnavailable,
 )
 from apasz_hub.middleware import SECURITY_HEADERS, STATIC_CACHE_CONTROL
-from apasz_hub.pages import homepage
+from apasz_hub.pages import SitePage, configuration_page, homepage
+from apasz_hub.theme import (
+    DEFAULT_THEME_COLORS_PATH,
+    THEME_COLORS_PATH_ENV,
+    THEME_STYLESHEET_CACHE_CONTROL,
+    THEME_STYLESHEET_URL,
+    ThemeColorToken,
+    load_theme_colors,
+    theme_stylesheet,
+)
+from tests.link_card_form_data import link_card_form_values
 
 
 async def _application_responses() -> tuple[
-    httpx.Response, httpx.Response, httpx.Response
+    httpx.Response, httpx.Response, httpx.Response, httpx.Response, httpx.Response
 ]:
     with patch("apasz_hub.pages.GITHUB_REPOSITORY_COUNTS", _repository_count_cache()):
         transport = httpx.ASGITransport(app=app)
@@ -44,16 +70,24 @@ async def _application_responses() -> tuple[
             transport=transport, base_url="http://testserver"
         ) as client:
             page_response = await client.get("/")
-            stylesheet_response = await client.get("/static/site.css")
+            stylesheet_response = await client.get(SITE_STYLESHEET_URL)
             cached_stylesheet_response = await client.get(
-                "/static/site.css",
+                SITE_STYLESHEET_URL,
                 headers={"If-None-Match": stylesheet_response.headers["etag"]},
             )
-            return page_response, stylesheet_response, cached_stylesheet_response
+            config_response = await client.get("/config")
+            theme_response = await client.get(THEME_STYLESHEET_URL)
+            return (
+                page_response,
+                stylesheet_response,
+                cached_stylesheet_response,
+                config_response,
+                theme_response,
+            )
 
 
 def _run_application_responses() -> tuple[
-    httpx.Response, httpx.Response, httpx.Response
+    httpx.Response, httpx.Response, httpx.Response, httpx.Response, httpx.Response
 ]:
     """Exercise file responses on Uvicorn's available event loop."""
 
@@ -66,8 +100,8 @@ class HomepageTests(TestCase):
     """Keep the public page and its configuration coherent."""
 
     def test_homepage_renders_every_destination(self) -> None:
-        document = render(asyncio.run(homepage(_repository_count_cache())))
         cards = load_link_cards()
+        document = render(asyncio.run(homepage(cards, _repository_count_cache())))
 
         self.assertIn("APasz", document)
         self.assertIn(f"--wordmark-source: url({WORDMARK_URL})", document)
@@ -79,6 +113,112 @@ class HomepageTests(TestCase):
             self.assertIn(card.href, document)
         self.assertIn('data-copy-text="mail@apasz.com"', document)
         self.assertIn('aria-current="page"', document)
+        self.assertIn('href="/config"', document)
+
+    def test_configuration_page_renders_editable_controls(self) -> None:
+        colors = load_theme_colors()
+        cards = load_link_cards()
+        icon_assets = load_icon_assets()
+        document = render(configuration_page(colors, cards, icon_assets))
+
+        self.assertIn("Configuration", document)
+        self.assertIn('class="site-shell"', document)
+        self.assertNotIn("config-shell", document)
+        self.assertIn("Link cards", document)
+        self.assertIn('aria-label="Link card management"', document)
+        self.assertEqual(document.count("<details"), len(cards))
+        self.assertEqual(document.count("<summary"), len(cards))
+        self.assertIn('data-link-card-controls=""', document)
+        self.assertIn('data-link-card-draft-url="/config/link-cards/draft"', document)
+        self.assertIn('data-link-card-draft-revision="0"', document)
+        self.assertIn('action="/config/link-cards"', document)
+        self.assertIn("Save link cards", document)
+        for card in cards:
+            self.assertIn(card.title, document)
+        for index, card in enumerate(cards):
+            self.assertIn(
+                f'name="{link_card_form_name(index, LinkCardFormField.TITLE)}"',
+                document,
+            )
+            self.assertIn(
+                f'value="{card.title}"',
+                document,
+            )
+            self.assertIn(
+                f'name="{link_card_form_name(index, LinkCardFormField.DESTINATION)}"',
+                document,
+            )
+        first_schema_name = link_card_form_name(0, LinkCardFormField.SCHEMA)
+        first_destination_name = link_card_form_name(0, LinkCardFormField.DESTINATION)
+        self.assertLess(
+            document.index(f'name="{first_schema_name}"'),
+            document.index(f'name="{first_destination_name}"'),
+        )
+        self.assertIn('data-link-card-destination-schema="github"', document)
+        self.assertIn('data-link-card-destination-schema="mail"', document)
+        self.assertIn('value="APasz"', document)
+        self.assertIn('value="mail@apasz.com"', document)
+        self.assertNotIn('value="mailto:mail@apasz.com"', document)
+        self.assertIn('data-icon-picker-dialog=""', document)
+        self.assertEqual(
+            document.count('data-icon-picker-trigger=""'),
+            len(cards),
+        )
+        self.assertEqual(
+            document.count("data-icon-picker-option="),
+            len(icon_assets),
+        )
+        for icon in icon_assets:
+            self.assertIn(f'data-icon-picker-option="{icon.url}"', document)
+            self.assertIn(f'src="{icon.url}"', document)
+            self.assertIn(icon.name, document)
+        self.assertEqual(
+            document.count('data-link-card-colour-control=""'),
+            len(cards) * len(LINK_CARD_COLOUR_CONTROLS),
+        )
+        self.assertEqual(
+            document.count('class="link-card-colour-pair__controls"'),
+            len(cards) * len(LINK_CARD_COLOUR_CONTROL_PAIRS),
+        )
+        self.assertEqual(document.count(">Border static / hover<"), len(cards))
+        self.assertEqual(document.count(">Icon static / hover<"), len(cards))
+        self.assertEqual(
+            document.count('class="link-card-toggle-pair"'),
+            len(cards),
+        )
+        for index in range(len(cards)):
+            for control in LINK_CARD_COLOUR_CONTROLS:
+                self.assertIn(
+                    f'name="{link_card_form_name(index, control.field)}"',
+                    document,
+                )
+                self.assertIn(
+                    f'name="{link_card_form_name(index, control.auto_field)}"',
+                    document,
+                )
+                self.assertIn(
+                    f'data-link-card-colour-fallback="{control.fallback_token.value}"',
+                    document,
+                )
+        self.assertIn("Site colours", document)
+        self.assertIn('data-theme-controls=""', document)
+        self.assertIn('data-theme-reset=""', document)
+        self.assertIn('action="/config/colours"', document)
+        self.assertIn('enctype="application/x-www-form-urlencoded"', document)
+        self.assertIn('type="submit"', document)
+        self.assertIn("Save colours", document)
+        self.assertIn('href="/config"', document)
+        self.assertIn('aria-current="page"', document)
+        self.assertNotIn('data-theme-color="github"', document)
+        self.assertNotIn("Button styles", document)
+        self.assertNotIn("button-showcase", document)
+        for color in colors:
+            self.assertIn(
+                f'data-theme-color="{color.token.value}"',
+                document,
+            )
+            self.assertIn(f'name="{color.token.value}"', document)
+            self.assertIn(f'value="{color.value}"', document)
 
     def test_icons_are_available_locally(self) -> None:
         icon_urls = [card.icon for card in load_link_cards()]
@@ -96,10 +236,13 @@ class HomepageTests(TestCase):
         self.assertIs(email.schema, CardKind.MAIL)
         self.assertIs(featured.schema, CardKind.GITHUB)
         self.assertEqual(featured.github_login, "APasz")
+        self.assertEqual(featured.border_hover, "#f0f6fc")
         with self.assertRaises(ValueError):
             replace(featured, metadata=None)
         with self.assertRaises(ValueError):
             replace(featured, icon_scale=0)
+        with self.assertRaises(ValueError):
+            replace(featured, icon_scale=True)
         with self.assertRaises(ValueError):
             replace(featured, copy_to_clipboard=True)
         with self.assertRaises(ValueError):
@@ -110,6 +253,8 @@ class HomepageTests(TestCase):
             replace(featured, href="https://github.com/APasz/homepage")
         with self.assertRaises(ValueError):
             replace(featured, href="https://github.com//APasz")
+        with self.assertRaises(ValueError):
+            replace(featured, border_hover="purple")
 
         copyable_featured = replace(
             featured,
@@ -130,7 +275,7 @@ class HomepageTests(TestCase):
 
         cache = GithubRepositoryCountCache(fetch_count)
         asyncio.run(cache.refresh("APasz"))
-        document = render(asyncio.run(homepage(cache)))
+        document = render(asyncio.run(homepage(load_link_cards(), cache)))
 
         self.assertIn(expected_metadata, document)
         self.assertNotIn(fallback_metadata, document)
@@ -144,7 +289,9 @@ class HomepageTests(TestCase):
             return 30
 
         document = render(
-            asyncio.run(homepage(GithubRepositoryCountCache(fetch_count)))
+            asyncio.run(
+                homepage(load_link_cards(), GithubRepositoryCountCache(fetch_count))
+            )
         )
 
         self.assertIn(fallback_metadata, document)
@@ -195,21 +342,68 @@ class HomepageTests(TestCase):
         self.assertNotIn('class="card__description"', descriptionless_document)
 
     def test_document_assets_are_linked(self) -> None:
+        colors = load_theme_colors()
         headers = render(*document_headers())
+        browser_theme_meta = render(theme_color_meta(colors))
         stylesheet = (STATIC_DIRECTORY / "site.css").read_text(encoding="utf-8")
         script = (STATIC_DIRECTORY / "site.js").read_text(encoding="utf-8")
 
         self.assertIn(f'href="{FAVICON_URL}"', headers)
         self.assertIn(f'src="{SITE_SCRIPT_URL}"', headers)
-        self.assertIn('href="/static/site.css"', headers)
+        self.assertIn(f'href="{THEME_STYLESHEET_URL}"', headers)
+        self.assertIn(f'href="{SITE_STYLESHEET_URL}"', headers)
+        self.assertLess(
+            headers.index(f'href="{THEME_STYLESHEET_URL}"'),
+            headers.index(f'href="{SITE_STYLESHEET_URL}"'),
+        )
+        self.assertRegex(SITE_STYLESHEET_URL, r"^/static/site\.css\?v=[0-9a-f]{12}$")
+        self.assertRegex(SITE_SCRIPT_URL, r"^/static/site\.js\?v=[0-9a-f]{12}$")
+        self.assertNotIn('data-theme-color-token="canvas"', headers)
+        self.assertIn('data-theme-color-token="canvas"', browser_theme_meta)
         self.assertIn("mask-image", stylesheet)
-        self.assertIn("var(--border-static, var(--border))", stylesheet)
-        self.assertIn("var(--border-hover, var(--accent))", stylesheet)
-        self.assertIn("var(--icon-static, var(--accent))", stylesheet)
-        self.assertIn("var(--icon-hover, var(--accent))", stylesheet)
+        self.assertIn("scrollbar-gutter: stable both-edges;", stylesheet)
+        self.assertIn("var(--border-static, var(--color-border))", stylesheet)
+        self.assertIn("var(--border-hover, var(--color-accent))", stylesheet)
+        self.assertIn("var(--icon-static, var(--color-accent))", stylesheet)
+        self.assertIn("var(--icon-hover, var(--color-accent))", stylesheet)
+        self.assertIn(
+            ".link-card-colour-control__input::-webkit-color-swatch {",
+            stylesheet,
+        )
+        self.assertIn(
+            ".link-card-colour-control__input::-moz-color-swatch {",
+            stylesheet,
+        )
+        self.assertNotRegex(stylesheet, r"#[0-9A-Fa-f]{3,8}\b")
+        for color in colors:
+            self.assertIn(
+                f"{color.css_variable}: {color.value};",
+                theme_stylesheet(colors),
+            )
+        shadow = next(
+            color for color in colors if color.token is ThemeColorToken.SHADOW
+        )
+        shadow_channels = " ".join(
+            str(int(shadow.value[index : index + 2], 16)) for index in (1, 3, 5)
+        )
+        self.assertIn("--shadow-opacity: 34%;", stylesheet)
+        self.assertIn(
+            f"--shadow: rgb({shadow_channels} / var(--shadow-opacity));",
+            theme_stylesheet(colors),
+        )
+        self.assertNotIn("rgb(from", theme_stylesheet(colors))
         self.assertIn("navigator.clipboard?.writeText", script)
         self.assertIn("event.preventDefault()", script)
         self.assertIn("window.location.assign(link.href)", script)
+        self.assertIn("Unsaved changes.", script)
+        self.assertIn("form.reset()", script)
+        self.assertIn('input.addEventListener("change"', script)
+        self.assertIn("function shadowCssValue", script)
+        self.assertIn("data-theme-color", script)
+        self.assertIn("function configureLinkCardControls", script)
+        self.assertIn("function configureColourControls", script)
+        self.assertIn("function updateAutomaticLinkCardColours", script)
+        self.assertIn("Draft updated. Save link cards to publish.", script)
         self.assertTrue((STATIC_DIRECTORY / "media" / "pfp-anim.webp").is_file())
         self.assertTrue(
             (STATIC_DIRECTORY / WORDMARK_URL.removeprefix("/static/")).is_file()
@@ -224,13 +418,33 @@ class HomepageTests(TestCase):
             page_response,
             stylesheet_response,
             cached_stylesheet_response,
+            config_response,
+            theme_response,
         ) = _run_application_responses()
 
         self.assertEqual(page_response.status_code, 200)
         self.assertIn("APasz", page_response.text)
+        canvas = next(
+            color.value
+            for color in load_theme_colors()
+            if color.token is ThemeColorToken.CANVAS
+        )
+        self.assertIn(
+            f'<meta name="theme-color" content="{canvas}"',
+            page_response.text,
+        )
         for header, value in SECURITY_HEADERS:
             self.assertEqual(page_response.headers[header], value)
-        self.assertNotIn("cache-control", page_response.headers)
+        self.assertIn(
+            "form-action 'self'", page_response.headers["content-security-policy"]
+        )
+        self.assertIn(
+            "connect-src 'self'", page_response.headers["content-security-policy"]
+        )
+        self.assertEqual(
+            page_response.headers["cache-control"],
+            application.DYNAMIC_PAGE_CACHE_CONTROL,
+        )
         self.assertEqual(stylesheet_response.status_code, 200)
         self.assertEqual(
             stylesheet_response.headers["cache-control"],
@@ -241,6 +455,221 @@ class HomepageTests(TestCase):
             cached_stylesheet_response.headers["cache-control"],
             STATIC_CACHE_CONTROL,
         )
+        self.assertEqual(config_response.status_code, 200)
+        self.assertEqual(
+            config_response.headers["cache-control"],
+            application.DYNAMIC_PAGE_CACHE_CONTROL,
+        )
+        self.assertIn('data-theme-controls=""', config_response.text)
+        self.assertIn('data-link-card-controls=""', config_response.text)
+        self.assertEqual(theme_response.status_code, 200)
+        self.assertEqual(theme_response.text, theme_stylesheet(load_theme_colors()))
+        self.assertTrue(theme_response.headers["content-type"].startswith("text/css"))
+        self.assertEqual(
+            theme_response.headers["cache-control"],
+            THEME_STYLESHEET_CACHE_CONTROL,
+        )
+
+    def test_link_card_draft_stays_in_memory_until_saved(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            original_document = DEFAULT_LINK_CARDS_PATH.read_text(encoding="utf-8")
+            path.write_text(original_document, encoding="utf-8")
+            store = LinkCardStore(path)
+            store.load()
+            original_title = store.published_cards()[0].title
+            draft_title = f"Draft {original_title}"
+            draft_revision = store.draft_revision
+            values = link_card_form_values(store.draft_cards())
+            values[link_card_form_name(0, LinkCardFormField.TITLE)] = draft_title
+
+            async def update_and_save() -> tuple[
+                httpx.Response,
+                str,
+                httpx.Response,
+                httpx.Response,
+                httpx.Response,
+                httpx.Response,
+                httpx.Response,
+            ]:
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                ) as client:
+                    draft_response = await client.post(
+                        SitePage.CONFIG_LINK_CARDS_DRAFT.value,
+                        data=values,
+                        headers={
+                            application.LINK_CARD_DRAFT_REVISION_HEADER: str(
+                                draft_revision
+                            )
+                        },
+                    )
+                    draft_document = path.read_text(encoding="utf-8")
+                    published_before_save = await client.get("/")
+                    config_draft = await client.get("/config")
+                    save_response = await client.post(
+                        SitePage.CONFIG_LINK_CARDS_SAVE.value,
+                        data=values,
+                        follow_redirects=False,
+                    )
+                    saved_config = await client.get(save_response.headers["location"])
+                    published_after_save = await client.get("/")
+                    return (
+                        draft_response,
+                        draft_document,
+                        published_before_save,
+                        config_draft,
+                        save_response,
+                        saved_config,
+                        published_after_save,
+                    )
+
+            with patch.object(application, "LINK_CARD_STORE", store):
+                (
+                    draft_response,
+                    draft_document,
+                    published_before_save,
+                    config_draft,
+                    save_response,
+                    saved_config,
+                    published_after_save,
+                ) = asyncio.run(update_and_save())
+            saved_cards = load_link_cards(path)
+
+        self.assertEqual(draft_response.status_code, 204)
+        self.assertEqual(draft_response.headers["cache-control"], "no-store")
+        self.assertEqual(draft_response.headers["x-link-card-draft-revision"], "2")
+        self.assertEqual(draft_document, original_document)
+        self.assertIn(original_title, published_before_save.text)
+        self.assertNotIn(draft_title, published_before_save.text)
+        self.assertIn(draft_title, config_draft.text)
+        self.assertIn("Draft changes are not live until saved.", config_draft.text)
+        self.assertEqual(save_response.status_code, 303)
+        self.assertEqual(
+            save_response.headers["location"],
+            f"{SitePage.CONFIG.value}?link_cards_saved=1",
+        )
+        self.assertIn("Link cards saved.", saved_config.text)
+        self.assertIn(draft_title, published_after_save.text)
+        self.assertEqual(saved_cards[0].title, draft_title)
+        self.assertFalse(store.is_draft_dirty)
+
+    def test_link_card_draft_rejects_invalid_submission_without_mutating_state(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            original_document = DEFAULT_LINK_CARDS_PATH.read_text(encoding="utf-8")
+            path.write_text(original_document, encoding="utf-8")
+            store = LinkCardStore(path)
+            store.load()
+            original_title = store.draft_cards()[0].title
+            values = link_card_form_values(store.draft_cards())
+            values[link_card_form_name(0, LinkCardFormField.TITLE)] = ""
+
+            async def submit_invalid_draft() -> httpx.Response:
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.post(
+                        SitePage.CONFIG_LINK_CARDS_DRAFT.value,
+                        data=values,
+                    )
+
+            with patch.object(application, "LINK_CARD_STORE", store):
+                response = asyncio.run(submit_invalid_draft())
+            saved_document = path.read_text(encoding="utf-8")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(store.draft_cards()[0].title, original_title)
+        self.assertEqual(store.published_cards()[0].title, original_title)
+        self.assertEqual(saved_document, original_document)
+
+    def test_configuration_save_persists_the_palette_json(self) -> None:
+        values = {color.token.value: color.value for color in load_theme_colors()}
+        values[ThemeColorToken.CANVAS.value] = "#123456"
+
+        async def save_palette() -> tuple[
+            httpx.Response, httpx.Response, httpx.Response
+        ]:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as client:
+                save_response = await client.post(
+                    SitePage.CONFIG_COLOURS_SAVE.value,
+                    data=values,
+                    follow_redirects=False,
+                )
+                config_response = await client.get(save_response.headers["location"])
+                theme_response = await client.get(THEME_STYLESHEET_URL)
+                return save_response, config_response, theme_response
+
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "theme_colors.json"
+            path.write_text(
+                DEFAULT_THEME_COLORS_PATH.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            with patch.dict(
+                "apasz_hub.theme.os.environ",
+                {THEME_COLORS_PATH_ENV: str(path)},
+            ):
+                save_response, config_response, theme_response = asyncio.run(
+                    save_palette()
+                )
+            saved_colors = load_theme_colors(path)
+
+        self.assertEqual(save_response.status_code, 303)
+        self.assertEqual(
+            save_response.headers["location"],
+            f"{SitePage.CONFIG.value}?saved=1",
+        )
+        self.assertIn('value="#123456"', config_response.text)
+        self.assertIn('meta name="theme-color" content="#123456"', config_response.text)
+        self.assertIn("Colours saved.", config_response.text)
+        self.assertIn("--color-canvas: #123456;", theme_response.text)
+        self.assertEqual(
+            next(
+                color.value
+                for color in saved_colors
+                if color.token is ThemeColorToken.CANVAS
+            ),
+            "#123456",
+        )
+
+    def test_configuration_save_rejects_invalid_colours_without_writing(self) -> None:
+        values = {color.token.value: color.value for color in load_theme_colors()}
+        values[ThemeColorToken.ACCENT.value] = "purple"
+
+        async def save_palette() -> httpx.Response:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as client:
+                return await client.post(
+                    SitePage.CONFIG_COLOURS_SAVE.value, data=values
+                )
+
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "theme_colors.json"
+            original_document = DEFAULT_THEME_COLORS_PATH.read_text(encoding="utf-8")
+            path.write_text(original_document, encoding="utf-8")
+            with patch.dict(
+                "apasz_hub.theme.os.environ",
+                {THEME_COLORS_PATH_ENV: str(path)},
+            ):
+                response = asyncio.run(save_palette())
+            saved_document = path.read_text(encoding="utf-8")
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(saved_document, original_document)
 
 
 async def _unavailable_repository_count(_: str) -> int:

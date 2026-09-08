@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Final, Protocol, cast
 
 from fasthtml import common as fh
+from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Receive, Scope, Send
 
@@ -25,9 +26,17 @@ class HtmlNode:
     """Opaque static type for a FastHTML node returned by this module."""
 
 
+class ResponseHeader:
+    """Opaque HTTP header returned alongside a FastHTML page node."""
+
+
 type HtmlChild = HtmlNode | str
-type RouteHandler = Callable[[], Awaitable[HtmlNode]]
-type RouteDecorator = Callable[[RouteHandler], RouteHandler]
+type RouteContent = HtmlNode | ResponseHeader
+type RouteResponse = RouteContent | tuple[RouteContent, ...] | Response
+type RouteHandler[**Parameters] = Callable[Parameters, Awaitable[RouteResponse]]
+type RouteDecorator[**Parameters] = Callable[
+    [RouteHandler[Parameters]], RouteHandler[Parameters]
+]
 type LifecycleHook = Callable[[], Awaitable[None]]
 
 
@@ -46,8 +55,12 @@ class FastHTMLApp(Protocol):
         """Serve the ASGI application."""
         ...
 
-    def get(self, path: str) -> RouteDecorator:
+    def get[**Parameters](self, path: str) -> RouteDecorator[Parameters]:
         """Create a GET route decorator."""
+        ...
+
+    def post[**Parameters](self, path: str) -> RouteDecorator[Parameters]:
+        """Create a POST route decorator."""
         ...
 
     def mount(self, path: str, app: object, *, name: str) -> None:
@@ -151,6 +164,12 @@ def render(*nodes: HtmlNode) -> str:
     return cast(str, fh.to_xml(nodes))
 
 
+def response_header(name: str, value: str) -> ResponseHeader:
+    """Return an HTTP response header for a FastHTML route result."""
+
+    return cast(ResponseHeader, fh.HttpHeader(name, value))
+
+
 def _component(value: object) -> Component:
     """Expose a dynamic FastHTML component through the typed tag contract."""
 
@@ -159,21 +178,31 @@ def _component(value: object) -> Component:
 
 A: Component = _component(fh.A)
 Article: Component = _component(fh.Article)
+Button: Component = _component(fh.Button)
+Details: Component = _component(fh.Details)
+Dialog: Component = _component(fh.Dialog)
 Div: Component = _component(fh.Div)
 Footer: Component = _component(fh.Footer)
+Form: Component = _component(fh.Form)
 H1: Component = _component(fh.H1)
 H2: Component = _component(fh.H2)
 Header: Component = _component(fh.Header)
 Img: Component = _component(fh.Img)
+Input: Component = _component(fh.Input)
+Label: Component = _component(fh.Label)
 Li: Component = _component(fh.Li)
 Link: Component = _component(fh.Link)
 Main: Component = _component(fh.Main)
 Meta: Component = _component(fh.Meta)
 Nav: Component = _component(fh.Nav)
+Option: Component = _component(fh.Option)
 P: Component = _component(fh.P)
 Picture: Component = _component(fh.Picture)
+Select: Component = _component(fh.Select)
 Section: Component = _component(fh.Section)
 Script: Component = _component(fh.Script)
 Span: Component = _component(fh.Span)
 Source: Component = _component(fh.Source)
+Summary: Component = _component(fh.Summary)
+Textarea: Component = _component(fh.Textarea)
 Ul: Component = _component(fh.Ul)

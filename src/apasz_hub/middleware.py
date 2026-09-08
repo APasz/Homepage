@@ -10,9 +10,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 CONTENT_SECURITY_POLICY: Final = (
     "default-src 'self'; "
     "base-uri 'none'; "
-    "connect-src 'none'; "
+    "connect-src 'self'; "
     "font-src 'self'; "
-    "form-action 'none'; "
+    "form-action 'self'; "
     "frame-ancestors 'none'; "
     "img-src 'self'; "
     "object-src 'none'; "

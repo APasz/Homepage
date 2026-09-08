@@ -1,0 +1,14 @@
+{
+    "canvas": "#000000",
+    "surface": "#0f0f0f",
+    "surface-raised": "#141414",
+    "surface-hover": "#282828",
+    "border": "#373737",
+    "text": "#ffffff",
+    "muted": "#b9b9b9",
+    "subtle": "#919191",
+    "accent": "#895dea",
+    "accent-muted": "#5a5a5a",
+    "metadata": "#c8b5ff",
+    "shadow": "#000000"
+}
