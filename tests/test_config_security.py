@@ -13,12 +13,14 @@ from unittest.mock import patch
 
 import httpx
 
+import apasz_hub.app as application
 from apasz_hub import config_security
 from apasz_hub.app import app
 from apasz_hub.pages import SitePage
 from apasz_hub.theme import (
     DEFAULT_THEME_COLORS_PATH,
     THEME_COLORS_PATH_ENV,
+    ThemeColorStore,
     load_theme_colors,
 )
 
@@ -355,11 +357,10 @@ class ConfigSecurityTests(TestCase):
                 encoding="utf-8",
             )
             access = _access()
+            theme_color_store = ThemeColorStore(path)
             with (
-                patch.dict(
-                    os.environ,
-                    {THEME_COLORS_PATH_ENV: str(path)},
-                ),
+                patch.dict(os.environ, {THEME_COLORS_PATH_ENV: str(path)}),
+                patch.object(application, "THEME_COLOR_STORE", theme_color_store),
                 patch.object(config_security, "CONFIG_ACCESS", access),
             ):
                 missing_token, invalid_token, wrong_origin, valid = asyncio.run(

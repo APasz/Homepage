@@ -97,9 +97,11 @@ configuration data.
 ## Appearance
 
 Shared interface colours are stored in `src/apasz_hub/theme_colors.json` and
-supplied to the site through `/theme.css`. The authenticated `/config` page
-previews changes; **Save colours** persists the JSON file. Reset discards
-unsaved edits.
+supplied to the site through `/theme.css`. The application validates the file
+at startup and serves that published in-memory snapshot. The authenticated
+`/config` page previews changes; **Save colours** atomically persists and
+publishes a new snapshot. Reset discards unsaved edits. Manual file edits take
+effect after a restart, so a malformed edit cannot interrupt public requests.
 
 For deployment, set `THEME_COLORS_PATH` in `.env` to a persistent writable JSON
 file rather than the packaged default.

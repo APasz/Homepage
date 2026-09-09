@@ -145,6 +145,50 @@ def save_theme_colors(
     return colors
 
 
+class ThemeColorStore:
+    """Keep the published theme palette in memory while persisting GUI saves."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        self._path = path
+        self._published_colors: ThemeColors | None = None
+
+    def load(self) -> ThemeColors:
+        """Load the persisted palette as this process's published snapshot."""
+
+        colors = load_theme_colors(self._data_path())
+        self._published_colors = colors
+        return colors
+
+    def published_colors(self) -> ThemeColors:
+        """Return the in-memory palette used by public responses."""
+
+        self._ensure_loaded()
+        colors = self._published_colors
+        if colors is None:
+            raise RuntimeError("Theme-colour store has no published snapshot.")
+        return colors
+
+    def save(self, values: Mapping[str, object]) -> ThemeColors:
+        """Persist a valid palette and publish it to this process."""
+
+        colors = save_theme_colors(values, self._data_path())
+        self._published_colors = colors
+        return colors
+
+    def _data_path(self) -> Path:
+        """Return the path fixed when this store first accesses its palette."""
+
+        if self._path is None:
+            self._path = _configured_theme_colors_path()
+        return self._path
+
+    def _ensure_loaded(self) -> None:
+        """Provide a safe one-time fallback for direct ASGI use outside lifespan."""
+
+        if self._published_colors is None:
+            self.load()
+
+
 def theme_color(colors: ThemeColors, token: ThemeColorToken) -> ThemeColor:
     """Return one loaded palette entry by its stable token."""
 

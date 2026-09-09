@@ -69,6 +69,7 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
         refresher = Mock()
         refresher.stop = AsyncMock()
         link_card_store = Mock()
+        theme_color_store = Mock()
 
         async def receive() -> Message:
             return await received.get()
@@ -88,6 +89,7 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
         )
         with (
             patch.object(application, "LINK_CARD_STORE", link_card_store),
+            patch.object(application, "THEME_COLOR_STORE", theme_color_store),
             patch.object(application, "GITHUB_REPOSITORY_REFRESHER", refresher),
         ):
             lifespan = asyncio.create_task(application.app(scope, receive, send))
@@ -96,6 +98,7 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
             await received.put({"type": "lifespan.shutdown"})
             await asyncio.wait_for(lifespan, timeout=1)
 
+        theme_color_store.load.assert_called_once_with()
         link_card_store.load.assert_called_once_with()
         refresher.start.assert_called_once_with()
         refresher.stop.assert_awaited_once_with()

@@ -14,6 +14,7 @@ from apasz_hub.theme import (
     DEFAULT_THEME_COLORS_PATH,
     THEME_COLORS_PATH_ENV,
     ThemeColorDataError,
+    ThemeColorStore,
     ThemeColorToken,
     load_theme_colors,
     save_theme_colors,
@@ -84,6 +85,90 @@ class ThemeColorDataTests(TestCase):
                     path.write_text(dumps(values), encoding="utf-8")
                     with self.assertRaises(ThemeColorDataError):
                         load_theme_colors(path)
+
+    def test_store_keeps_the_published_snapshot_when_json_changes_externally(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "theme_colors.json"
+            path.write_text(
+                DEFAULT_THEME_COLORS_PATH.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            store = ThemeColorStore(path)
+            published_colors = store.load()
+
+            external_values = {
+                color.token.value: color.value for color in published_colors
+            }
+            external_values[ThemeColorToken.CANVAS.value] = "#123456"
+            path.write_text(dumps(external_values), encoding="utf-8")
+            self.assertEqual(store.published_colors(), published_colors)
+
+            path.write_text("{not valid JSON", encoding="utf-8")
+
+        self.assertEqual(store.published_colors(), published_colors)
+
+    def test_store_save_persists_and_publishes_a_valid_palette(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "theme_colors.json"
+            path.write_text(
+                DEFAULT_THEME_COLORS_PATH.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            store = ThemeColorStore(path)
+            store.load()
+            values = {
+                color.token.value: color.value for color in store.published_colors()
+            }
+            values[ThemeColorToken.CANVAS.value] = "#123456"
+
+            saved_colors = store.save(values)
+            persisted_colors = load_theme_colors(path)
+
+        self.assertEqual(store.published_colors(), saved_colors)
+        self.assertEqual(persisted_colors, saved_colors)
+
+    def test_store_saves_to_the_path_loaded_at_startup(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            startup_path = directory / "startup_theme_colors.json"
+            changed_path = directory / "changed_theme_colors.json"
+            startup_values = _palette_values()
+            changed_values = {
+                **startup_values,
+                ThemeColorToken.CANVAS.value: "#654321",
+            }
+            startup_path.write_text(dumps(startup_values), encoding="utf-8")
+            changed_path.write_text(dumps(changed_values), encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {THEME_COLORS_PATH_ENV: str(startup_path)},
+            ):
+                store = ThemeColorStore()
+                store.load()
+            saved_values = {
+                color.token.value: color.value for color in store.published_colors()
+            }
+            saved_values[ThemeColorToken.CANVAS.value] = "#123456"
+
+            with patch.dict(
+                os.environ,
+                {THEME_COLORS_PATH_ENV: str(changed_path)},
+            ):
+                store.save(saved_values)
+            saved_startup_colors = load_theme_colors(startup_path)
+            unchanged_changed_colors = load_theme_colors(changed_path)
+
+        self.assertEqual(
+            theme_color(saved_startup_colors, ThemeColorToken.CANVAS).value,
+            "#123456",
+        )
+        self.assertEqual(
+            theme_color(unchanged_changed_colors, ThemeColorToken.CANVAS).value,
+            "#654321",
+        )
 
     def test_empty_palette_path_override_fails_loudly(self) -> None:
         with (

@@ -42,8 +42,7 @@ from apasz_hub.theme import (
     THEME_STYLESHEET_CACHE_CONTROL,
     THEME_STYLESHEET_URL,
     ThemeColorDataError,
-    load_theme_colors,
-    save_theme_colors,
+    ThemeColorStore,
     theme_stylesheet,
 )
 
@@ -52,6 +51,7 @@ LINK_CARD_DRAFT_REVISION_HEADER: Final = "X-Link-Card-Draft-Revision"
 DYNAMIC_PAGE_CACHE_CONTROL: Final = "no-store"
 LOGGER = getLogger(__name__)
 LINK_CARD_STORE: Final = LinkCardStore()
+THEME_COLOR_STORE: Final = ThemeColorStore()
 GITHUB_REPOSITORY_REFRESHER: Final = GithubRepositoryCountRefresher(
     GITHUB_REPOSITORY_COUNTS,
     LINK_CARD_STORE.published_cards,
@@ -59,8 +59,9 @@ GITHUB_REPOSITORY_REFRESHER: Final = GithubRepositoryCountRefresher(
 
 
 async def _start_application() -> None:
-    """Load LinkCards once, then refresh GitHub metadata in the background."""
+    """Load published snapshots, then refresh GitHub metadata in the background."""
 
+    THEME_COLOR_STORE.load()
     LINK_CARD_STORE.load()
     config_security.CONFIG_ACCESS.settings()
     GITHUB_REPOSITORY_REFRESHER.start()
@@ -87,7 +88,7 @@ mount_static_files(app, path="/static", directory=STATIC_DIRECTORY)
 async def home() -> RouteResponse:
     """Render the public hub."""
 
-    colors = load_theme_colors()
+    colors = THEME_COLOR_STORE.published_colors()
     return (
         theme_color_meta(colors),
         await homepage(LINK_CARD_STORE.published_cards()),
@@ -101,9 +102,9 @@ async def config(
     saved: str | None = None,
     link_cards_saved: str | None = None,
 ) -> RouteResponse:
-    """Render persisted palette and in-memory LinkCard draft controls."""
+    """Render the published palette and in-memory LinkCard draft controls."""
 
-    colors = load_theme_colors()
+    colors = THEME_COLOR_STORE.published_colors()
     return (
         theme_color_meta(colors),
         configuration_page(
@@ -186,10 +187,10 @@ async def logout(request: Request) -> RedirectResponse:
 
 @app.post(SitePage.CONFIG_COLOURS_SAVE.value)
 async def save_config(request: Request) -> RedirectResponse:
-    """Validate and persist one submitted shared palette."""
+    """Validate, persist, and publish one submitted shared palette."""
 
     try:
-        save_theme_colors(await _configuration_form_values(request))
+        THEME_COLOR_STORE.save(await _configuration_form_values(request))
     except ThemeColorDataError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     _log_configuration_change(request, "saved site colours")
@@ -318,10 +319,10 @@ def _link_card_delete_index(values: Mapping[str, object]) -> int:
 
 @app.get(THEME_STYLESHEET_URL)
 async def theme_css() -> Response:
-    """Serve palette custom properties from their typed source of truth."""
+    """Serve custom properties from the published palette snapshot."""
 
     return Response(
-        theme_stylesheet(load_theme_colors()),
+        theme_stylesheet(THEME_COLOR_STORE.published_colors()),
         media_type="text/css",
         headers={"Cache-Control": THEME_STYLESHEET_CACHE_CONTROL},
     )

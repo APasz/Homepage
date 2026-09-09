@@ -64,6 +64,7 @@ from apasz_hub.theme import (
     THEME_COLORS_PATH_ENV,
     THEME_STYLESHEET_CACHE_CONTROL,
     THEME_STYLESHEET_URL,
+    ThemeColorStore,
     ThemeColorToken,
     load_theme_colors,
     theme_stylesheet,
@@ -529,7 +530,7 @@ class HomepageTests(TestCase):
         self.assertIn("APasz", page_response.text)
         canvas = next(
             color.value
-            for color in load_theme_colors()
+            for color in application.THEME_COLOR_STORE.published_colors()
             if color.token is ThemeColorToken.CANVAS
         )
         self.assertIn(
@@ -566,12 +567,60 @@ class HomepageTests(TestCase):
         self.assertIn('data-theme-controls=""', config_response.text)
         self.assertIn('data-link-card-controls=""', config_response.text)
         self.assertEqual(theme_response.status_code, 200)
-        self.assertEqual(theme_response.text, theme_stylesheet(load_theme_colors()))
+        self.assertEqual(
+            theme_response.text,
+            theme_stylesheet(application.THEME_COLOR_STORE.published_colors()),
+        )
         self.assertTrue(theme_response.headers["content-type"].startswith("text/css"))
         self.assertEqual(
             theme_response.headers["cache-control"],
             THEME_STYLESHEET_CACHE_CONTROL,
         )
+
+    def test_malformed_manual_theme_edit_keeps_public_responses_available(
+        self,
+    ) -> None:
+        async def public_responses() -> tuple[httpx.Response, httpx.Response]:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url=CONFIG_TEST_ORIGIN,
+            ) as client:
+                return (
+                    await client.get(SitePage.HOME.value),
+                    await client.get(THEME_STYLESHEET_URL),
+                )
+
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "theme_colors.json"
+            path.write_text(
+                DEFAULT_THEME_COLORS_PATH.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            store = ThemeColorStore(path)
+            published_colors = store.load()
+            path.write_text("{not valid JSON", encoding="utf-8")
+
+            with (
+                patch.dict(os.environ, {THEME_COLORS_PATH_ENV: str(path)}),
+                patch.object(application, "THEME_COLOR_STORE", store),
+                patch("apasz_hub.theme.load_theme_colors") as load_colors,
+            ):
+                page_response, theme_response = asyncio.run(public_responses())
+
+        load_colors.assert_not_called()
+        canvas = next(
+            color.value
+            for color in published_colors
+            if color.token is ThemeColorToken.CANVAS
+        )
+        self.assertEqual(page_response.status_code, 200)
+        self.assertIn(
+            f'<meta name="theme-color" content="{canvas}"',
+            page_response.text,
+        )
+        self.assertEqual(theme_response.status_code, 200)
+        self.assertEqual(theme_response.text, theme_stylesheet(published_colors))
 
     def test_link_card_draft_stays_in_memory_until_saved(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -841,15 +890,17 @@ class HomepageTests(TestCase):
                 DEFAULT_THEME_COLORS_PATH.read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
-            with patch.dict(
-                os.environ,
-                {THEME_COLORS_PATH_ENV: str(path)},
+            store = ThemeColorStore(path)
+            published_colors = store.load()
+            access = _config_access()
+            with (
+                patch.dict(os.environ, {THEME_COLORS_PATH_ENV: str(path)}),
+                patch.object(application, "THEME_COLOR_STORE", store),
+                patch.object(config_security, "CONFIG_ACCESS", access),
             ):
-                access = _config_access()
-                with patch.object(config_security, "CONFIG_ACCESS", access):
-                    save_response, config_response, theme_response = asyncio.run(
-                        save_palette(access)
-                    )
+                save_response, config_response, theme_response = asyncio.run(
+                    save_palette(access)
+                )
             saved_colors = load_theme_colors(path)
 
         self.assertEqual(save_response.status_code, 303)
@@ -861,6 +912,8 @@ class HomepageTests(TestCase):
         self.assertIn('meta name="theme-color" content="#123456"', config_response.text)
         self.assertIn("Colours saved", config_response.text)
         self.assertIn("--color-canvas: #123456;", theme_response.text)
+        self.assertNotEqual(store.published_colors(), published_colors)
+        self.assertEqual(store.published_colors(), saved_colors)
         self.assertEqual(
             next(
                 color.value
@@ -891,17 +944,20 @@ class HomepageTests(TestCase):
             path = Path(temporary_directory) / "theme_colors.json"
             original_document = DEFAULT_THEME_COLORS_PATH.read_text(encoding="utf-8")
             path.write_text(original_document, encoding="utf-8")
-            with patch.dict(
-                os.environ,
-                {THEME_COLORS_PATH_ENV: str(path)},
+            store = ThemeColorStore(path)
+            published_colors = store.load()
+            access = _config_access()
+            with (
+                patch.dict(os.environ, {THEME_COLORS_PATH_ENV: str(path)}),
+                patch.object(application, "THEME_COLOR_STORE", store),
+                patch.object(config_security, "CONFIG_ACCESS", access),
             ):
-                access = _config_access()
-                with patch.object(config_security, "CONFIG_ACCESS", access):
-                    response = asyncio.run(save_palette(access))
+                response = asyncio.run(save_palette(access))
             saved_document = path.read_text(encoding="utf-8")
 
         self.assertEqual(response.status_code, 422)
         self.assertEqual(saved_document, original_document)
+        self.assertEqual(store.published_colors(), published_colors)
 
 
 async def _unavailable_repository_count(_: str) -> int:
