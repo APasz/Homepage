@@ -498,7 +498,8 @@ textarea:focus-visible {
 }
 
 .link-card-control,
-.link-card-toggle {
+.link-card-toggle,
+.open-graph-control {
     display: grid;
     grid-template-columns: minmax(8rem, 0.45fr) minmax(0, 1fr);
     align-items: center;
@@ -518,6 +519,7 @@ textarea:focus-visible {
 
 .link-card-control__label,
 .link-card-toggle__label,
+.open-graph-control__label,
 .link-card-status {
     color: var(--color-subtle);
     font-family: var(--font-mono);
@@ -527,7 +529,8 @@ textarea:focus-visible {
     text-transform: uppercase;
 }
 
-.link-card-control__input {
+.link-card-control__input,
+.open-graph-control__input {
     width: 100%;
     min-width: 0;
     min-height: 1.9rem;
@@ -543,12 +546,16 @@ textarea:focus-visible {
 .link-card-control:hover,
 .link-card-control:focus-within,
 .link-card-toggle:hover,
-.link-card-toggle:focus-within {
+.link-card-toggle:focus-within,
+.open-graph-control:hover,
+.open-graph-control:focus-within {
     background: var(--color-surface-hover);
 }
 
 .link-card-control__input:hover,
-.link-card-control__input:focus {
+.link-card-control__input:focus,
+.open-graph-control__input:hover,
+.open-graph-control__input:focus {
     border-color: var(--color-accent);
     background: var(--color-surface-raised);
 }
@@ -630,9 +637,13 @@ textarea:focus-visible {
     accent-color: var(--color-accent);
 }
 
+.link-card-control__textarea,
+.open-graph-control__textarea {
+    resize: vertical;
+}
+
 .link-card-control__textarea {
     min-height: 3.5rem;
-    resize: vertical;
 }
 
 .link-card-toggle {
@@ -930,6 +941,30 @@ textarea:focus-visible {
     border: 0;
 }
 
+.open-graph__help {
+    margin: -0.25rem 0 0.85rem;
+    color: var(--color-muted);
+    font-size: 0.82rem;
+}
+
+.open-graph__fields {
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-raised);
+}
+
+.open-graph-control + .open-graph-control {
+    border-top: 1px solid var(--color-border);
+}
+
+.open-graph-control__input:hover,
+.open-graph-control__input:focus {
+    background: var(--color-surface);
+}
+
+.open-graph-control__textarea {
+    min-height: 4.1rem;
+}
+
 .config-status {
     margin: 0;
     color: var(--color-subtle);
@@ -1134,6 +1169,7 @@ a.site-nav__link:focus-visible {
     }
 
     .link-card-control,
+    .open-graph-control,
     .link-card-toggle {
         grid-template-columns: 1fr;
         gap: 0.2rem;

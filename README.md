@@ -111,6 +111,17 @@ Link-card border and icon colours can be overridden from `/config`. Leave Auto
 enabled to inherit the matching shared palette colour; custom overrides persist
 with the LinkCard JSON data.
 
+## Open Graph previews
+
+The `/config` page also controls the site name, title, description, and optional
+image URL used when the homepage is shared. These values update the standard
+description, Open Graph, and X/Twitter metadata together. The canonical URL
+continues to come from `PUBLIC_ORIGIN`, so it remains consistent with the public
+deployment origin.
+
+The data is stored in `src/apasz_hub/open_graph.json`. For deployment, set
+`OPEN_GRAPH_PATH` to a persistent writable JSON file.
+
 ## GitHub card metadata
 
 GitHub cards refresh their public repository count in a background task when the

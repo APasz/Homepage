@@ -22,6 +22,7 @@ from apasz_hub.settings import (
     DEFAULT_PUBLIC_ORIGIN,
     DOTENV_PATH,
     HOST_ENV,
+    OPEN_GRAPH_PATH_ENV,
     PORT_ENV,
     PROJECT_ROOT,
     PUBLIC_ORIGIN_ENV,
@@ -111,6 +112,7 @@ class ApplicationSettingsTests(TestCase):
         self.assertEqual(settings.port, DEFAULT_PORT)
         self.assertEqual(settings.host, DEFAULT_HOST)
         self.assertEqual(settings.public_origin, DEFAULT_PUBLIC_ORIGIN)
+        self.assertIsNone(settings.open_graph_path)
         self.assertIsNone(settings.config_password_hash)
         self.assertIsNone(settings.config_session_secret)
 
@@ -120,6 +122,13 @@ class ApplicationSettingsTests(TestCase):
 
         self.assertEqual(settings.port, 5100)
         self.assertEqual(settings.host, DEFAULT_HOST)
+
+    def test_open_graph_path_is_loaded_from_explicit_settings(self) -> None:
+        path = "/var/lib/apasz/open_graph.json"
+
+        configured = load_settings({OPEN_GRAPH_PATH_ENV: path})
+
+        self.assertEqual(configured.open_graph_path, Path(path))
 
     def test_invalid_cookie_override_fails_without_echoing_secrets(self) -> None:
         with self.assertRaisesRegex(

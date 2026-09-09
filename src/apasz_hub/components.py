@@ -24,6 +24,7 @@ from apasz_hub.framework import (
     P,
     Script,
     Span,
+    Title,
 )
 from apasz_hub.theme import (
     THEME_STYLESHEET_URL,
@@ -47,21 +48,55 @@ def button_class(style: ButtonStyle) -> str:
 
 
 def document_headers(metadata: SiteMetadata = SITE) -> tuple[HtmlNode, ...]:
-    """Build document metadata shared by every rendered page."""
+    """Build the complete document head for a page with static metadata."""
 
+    return (
+        *document_metadata(metadata),
+        *document_asset_headers(),
+    )
+
+
+def document_metadata(
+    metadata: SiteMetadata,
+    *,
+    include_title: bool = True,
+) -> tuple[HtmlNode, ...]:
+    """Build request-fresh title and social metadata for one rendered page."""
+
+    title = (Title(metadata.title),) if include_title else ()
+    image_metadata: tuple[HtmlNode, ...] = ()
+    if metadata.image_url is not None:
+        image_metadata = (
+            Meta(property="og:image", content=metadata.image_url),
+            Meta(name="twitter:image", content=metadata.image_url),
+        )
     return (
         Meta(charset="utf-8"),
         Meta(name="viewport", content="width=device-width, initial-scale=1"),
+        *title,
         Meta(name="description", content=metadata.description),
         Meta(property="og:type", content="website"),
-        Meta(property="og:site_name", content=metadata.title),
+        Meta(property="og:site_name", content=metadata.site_name),
         Meta(property="og:title", content=metadata.title),
         Meta(property="og:description", content=metadata.description),
+        *image_metadata,
         Meta(property="og:url", content=metadata.canonical_url),
-        Meta(name="twitter:card", content="summary"),
+        Meta(
+            name="twitter:card",
+            content="summary_large_image"
+            if metadata.image_url is not None
+            else "summary",
+        ),
         Meta(name="twitter:title", content=metadata.title),
         Meta(name="twitter:description", content=metadata.description),
         Link(rel="canonical", href=metadata.canonical_url),
+    )
+
+
+def document_asset_headers() -> tuple[HtmlNode, ...]:
+    """Build static document tags that do not depend on site configuration."""
+
+    return (
         Link(rel="icon", type="image/png", sizes="64x64", href=FAVICON_URL),
         Link(rel="stylesheet", href=THEME_STYLESHEET_URL),
         Link(rel="stylesheet", href=SITE_STYLESHEET_URL),

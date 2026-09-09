@@ -11,7 +11,7 @@ from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
 from apasz_hub import config_security
-from apasz_hub.components import theme_color_meta
+from apasz_hub.components import document_metadata, theme_color_meta
 from apasz_hub.data import (
     LINK_CARD_DELETE_INDEX_FORM_NAME,
     LinkCardDataError,
@@ -20,6 +20,7 @@ from apasz_hub.data import (
 )
 from apasz_hub.framework import FastHTMLApp, RouteResponse, response_header
 from apasz_hub.middleware import NO_STORE_CACHE_CONTROL
+from apasz_hub.open_graph import OpenGraphDataError
 from apasz_hub.pages import configuration_page
 from apasz_hub.routes.paths import SiteRoute
 from apasz_hub.services import ApplicationServices
@@ -33,24 +34,29 @@ def register_configuration_routes(
     app: FastHTMLApp,
     services: ApplicationServices,
 ) -> None:
-    """Register the authenticated palette and LinkCard editor routes."""
+    """Register the authenticated palette, sharing, and LinkCard editor routes."""
 
     async def config(
         request: Request,
         saved: str | None = None,
+        open_graph_saved: str | None = None,
         link_cards_saved: str | None = None,
     ) -> RouteResponse:
-        """Render published colours and the in-memory LinkCard draft."""
+        """Render published site settings and the in-memory LinkCard draft."""
 
+        metadata = services.open_graph.published_metadata()
         colors = services.theme_colors.published_colors()
         link_cards = services.link_cards
         return (
+            *document_metadata(metadata),
             theme_color_meta(colors),
             configuration_page(
                 colors,
                 link_cards.draft_cards(),
                 load_icon_assets(),
+                metadata=metadata,
                 colours_saved=saved == "1",
+                open_graph_saved=open_graph_saved == "1",
                 link_cards_saved=link_cards_saved == "1",
                 link_cards_dirty=link_cards.is_draft_dirty,
                 link_cards_draft_revision=link_cards.draft_revision,
@@ -68,6 +74,19 @@ def register_configuration_routes(
             raise HTTPException(status_code=422, detail=str(error)) from error
         _log_configuration_change(request, "saved site colours")
         return RedirectResponse(f"{SiteRoute.CONFIG.value}?saved=1", status_code=303)
+
+    async def save_open_graph(request: Request) -> RedirectResponse:
+        """Validate, persist, and publish submitted social sharing metadata."""
+
+        try:
+            services.open_graph.save(await _configuration_form_values(request))
+        except OpenGraphDataError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        _log_configuration_change(request, "saved Open Graph metadata")
+        return RedirectResponse(
+            f"{SiteRoute.CONFIG.value}?open_graph_saved=1",
+            status_code=303,
+        )
 
     async def update_link_card_draft(request: Request) -> Response:
         """Validate and retain the submitted LinkCard draft without writing JSON."""
@@ -133,6 +152,7 @@ def register_configuration_routes(
 
     app.get(SiteRoute.CONFIG.value)(config)
     app.post(SiteRoute.CONFIG_COLOURS_SAVE.value)(save_config)
+    app.post(SiteRoute.CONFIG_OPEN_GRAPH_SAVE.value)(save_open_graph)
     app.post(SiteRoute.CONFIG_LINK_CARDS_DRAFT.value)(update_link_card_draft)
     app.post(SiteRoute.CONFIG_LINK_CARDS_ADD.value)(add_link_card)
     app.post(SiteRoute.CONFIG_LINK_CARDS_DELETE.value)(delete_link_card)

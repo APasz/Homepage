@@ -20,6 +20,7 @@ class SiteRoute(StrEnum):
     CONFIG_LOGIN = CONFIG_LOGIN_PATH
     CONFIG_LOGOUT = CONFIG_LOGOUT_PATH
     CONFIG_COLOURS_SAVE = f"{CONFIG_PATH}/colours"
+    CONFIG_OPEN_GRAPH_SAVE = f"{CONFIG_PATH}/open-graph"
     CONFIG_LINK_CARDS_DRAFT = f"{CONFIG_PATH}/link-cards/draft"
     CONFIG_LINK_CARDS_ADD = f"{CONFIG_PATH}/link-cards/add"
     CONFIG_LINK_CARDS_DELETE = f"{CONFIG_PATH}/link-cards/delete"

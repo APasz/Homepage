@@ -48,12 +48,16 @@ if set(_ERROR_PAGE_COPIES) != set(ErrorPageStatus):
     raise RuntimeError("Every public error status must have page copy.")
 
 
-def error_page(status: ErrorPageStatus) -> tuple[HtmlNode, HtmlNode]:
+def error_page(
+    status: ErrorPageStatus,
+    *,
+    site_title: str = SITE.title,
+) -> tuple[HtmlNode, HtmlNode]:
     """Build a complete public error-page body and document title."""
 
     page_copy = _ERROR_PAGE_COPIES[status]
     return (
-        Title(f"{status.value} · {SITE.title}"),
+        Title(f"{status.value} · {site_title}"),
         Main(
             Div(
                 Section(

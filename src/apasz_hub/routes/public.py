@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from starlette.responses import PlainTextResponse, Response
 
-from apasz_hub.components import theme_color_meta
+from apasz_hub.components import document_metadata, theme_color_meta
 from apasz_hub.errors import error_page_response
 from apasz_hub.framework import (
     FastHTMLApp,
@@ -32,8 +32,10 @@ def register_public_routes(
     async def home() -> RouteResponse:
         """Render the public hub from the published snapshots."""
 
+        metadata = services.open_graph.published_metadata()
         colors = services.theme_colors.published_colors()
         return (
+            *document_metadata(metadata),
             theme_color_meta(colors),
             await homepage(
                 services.link_cards.published_cards(),
@@ -65,6 +67,7 @@ def register_public_routes(
         return error_page_response(
             services.theme_colors.published_colors(),
             ErrorPageStatus.NOT_FOUND,
+            metadata=services.open_graph.published_metadata(),
         )
 
     async def internal_server_error() -> PageResponse:
@@ -73,6 +76,7 @@ def register_public_routes(
         return error_page_response(
             services.theme_colors.published_colors(),
             ErrorPageStatus.INTERNAL_SERVER_ERROR,
+            metadata=services.open_graph.published_metadata(),
         )
 
     app.get(SiteRoute.HOME.value)(home)

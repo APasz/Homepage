@@ -13,6 +13,7 @@ PORT_ENV: Final = "PORT"
 HOST_ENV: Final = "HOST"
 LINK_CARDS_PATH_ENV: Final = "LINK_CARDS_PATH"
 THEME_COLORS_PATH_ENV: Final = "THEME_COLORS_PATH"
+OPEN_GRAPH_PATH_ENV: Final = "OPEN_GRAPH_PATH"
 CONFIG_PASSWORD_HASH_ENV: Final = "CONFIG_PASSWORD_HASH"
 CONFIG_SESSION_SECRET_ENV: Final = "CONFIG_SESSION_SECRET"
 PUBLIC_ORIGIN_ENV: Final = "PUBLIC_ORIGIN"
@@ -28,6 +29,7 @@ _FIELD_ENV_NAMES: Final = {
     "host": HOST_ENV,
     "link_cards_path": LINK_CARDS_PATH_ENV,
     "theme_colors_path": THEME_COLORS_PATH_ENV,
+    "open_graph_path": OPEN_GRAPH_PATH_ENV,
     "config_password_hash": CONFIG_PASSWORD_HASH_ENV,
     "config_session_secret": CONFIG_SESSION_SECRET_ENV,
     "public_origin": PUBLIC_ORIGIN_ENV,
@@ -59,6 +61,10 @@ class ApplicationSettings(BaseSettings):
     theme_colors_path: Path | None = Field(
         default=None,
         validation_alias=THEME_COLORS_PATH_ENV,
+    )
+    open_graph_path: Path | None = Field(
+        default=None,
+        validation_alias=OPEN_GRAPH_PATH_ENV,
     )
     config_password_hash: SecretStr | None = Field(
         default=None,
@@ -109,7 +115,12 @@ class ApplicationSettings(BaseSettings):
             raise ValueError("must not be empty.")
         return value
 
-    @field_validator("link_cards_path", "theme_colors_path", mode="before")
+    @field_validator(
+        "link_cards_path",
+        "theme_colors_path",
+        "open_graph_path",
+        mode="before",
+    )
     @classmethod
     def _validate_optional_path(cls, value: object) -> object:
         """Reject an explicitly blank path while accepting an omitted value."""
@@ -159,6 +170,7 @@ def load_settings(
                 HOST_ENV: environment.get(HOST_ENV, DEFAULT_HOST),
                 LINK_CARDS_PATH_ENV: environment.get(LINK_CARDS_PATH_ENV),
                 THEME_COLORS_PATH_ENV: environment.get(THEME_COLORS_PATH_ENV),
+                OPEN_GRAPH_PATH_ENV: environment.get(OPEN_GRAPH_PATH_ENV),
                 CONFIG_PASSWORD_HASH_ENV: environment.get(CONFIG_PASSWORD_HASH_ENV),
                 CONFIG_SESSION_SECRET_ENV: environment.get(CONFIG_SESSION_SECRET_ENV),
                 PUBLIC_ORIGIN_ENV: environment.get(

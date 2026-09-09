@@ -239,6 +239,7 @@ class ConfigSecurityTests(TestCase):
                 writes: list[httpx.Response] = []
                 for path in (
                     SiteRoute.CONFIG_COLOURS_SAVE.value,
+                    SiteRoute.CONFIG_OPEN_GRAPH_SAVE.value,
                     SiteRoute.CONFIG_LINK_CARDS_DRAFT.value,
                     SiteRoute.CONFIG_LINK_CARDS_ADD.value,
                     SiteRoute.CONFIG_LINK_CARDS_DELETE.value,

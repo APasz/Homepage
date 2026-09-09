@@ -319,12 +319,15 @@ class _LinkCardOptions(TypedDict, total=False):
 class SiteMetadata:
     """Document metadata shared by public pages."""
 
+    site_name: str
     title: str
     description: str
     canonical_url: str
+    image_url: str | None = None
 
 
 SITE: Final = SiteMetadata(
+    site_name="APasz",
     title="APasz",
     description="The public APasz hub for code, community, and contact links",
     canonical_url=f"{settings.DEFAULT_PUBLIC_ORIGIN}/",

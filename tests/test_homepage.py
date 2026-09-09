@@ -59,6 +59,13 @@ from apasz_hub.middleware import (
     SECURITY_HEADERS,
     STATIC_CACHE_CONTROL,
 )
+from apasz_hub.open_graph import (
+    DEFAULT_OPEN_GRAPH_PATH,
+    OPEN_GRAPH_FIELD_DEFINITIONS,
+    OpenGraphField,
+    OpenGraphStore,
+    load_open_graph_metadata,
+)
 from apasz_hub.pages import (
     ErrorPageStatus,
     configuration_login_page,
@@ -148,6 +155,7 @@ def _isolated_application(
     *,
     link_cards: LinkCardStore | None = None,
     theme_colors: ThemeColorStore | None = None,
+    open_graph: OpenGraphStore | None = None,
     github_repository_counts: GithubRepositoryCountCache | None = None,
 ) -> FastHTMLApp:
     """Build an application whose mutable collaborators belong to one test."""
@@ -156,6 +164,7 @@ def _isolated_application(
         create_application_services(
             link_cards=link_cards,
             theme_colors=theme_colors,
+            open_graph=open_graph,
             github_repository_counts=(
                 _repository_count_cache()
                 if github_repository_counts is None
@@ -355,6 +364,16 @@ class HomepageTests(TestCase):
         self.assertIn('enctype="application/x-www-form-urlencoded"', document)
         self.assertIn('type="submit"', document)
         self.assertIn("Save colours", document)
+        self.assertIn("Open Graph", document)
+        self.assertIn('aria-label="Open Graph configuration"', document)
+        self.assertIn('action="/config/open-graph"', document)
+        self.assertIn("Save Open Graph", document)
+        for definition in OPEN_GRAPH_FIELD_DEFINITIONS:
+            self.assertIn(f'name="{definition.field.value}"', document)
+            self.assertIn(
+                f'maxlength="{definition.maximum_length}"',
+                document,
+            )
         self.assertNotIn('href="/config"', document)
         self.assertNotIn('data-theme-color="github"', document)
         self.assertNotIn("Button styles", document)
@@ -507,6 +526,10 @@ class HomepageTests(TestCase):
         self.assertIn(f'src="{SITE_SCRIPT_URL}"', headers)
         self.assertIn(f'href="{THEME_STYLESHEET_URL}"', headers)
         self.assertIn(f'href="{SITE_STYLESHEET_URL}"', headers)
+        self.assertLess(
+            headers.index('<meta charset="utf-8">'),
+            headers.index("<title>APasz</title>"),
+        )
         self.assertLess(
             headers.index(f'href="{THEME_STYLESHEET_URL}"'),
             headers.index(f'href="{SITE_STYLESHEET_URL}"'),
@@ -1001,9 +1024,9 @@ class HomepageTests(TestCase):
             )
             configured_metadata = "Configured fallback metadata"
             values = link_card_form_values(cards)
-            values[
-                link_card_form_name(github_index, LinkCardFormField.METADATA)
-            ] = configured_metadata
+            values[link_card_form_name(github_index, LinkCardFormField.METADATA)] = (
+                configured_metadata
+            )
             refresh_attempted = asyncio.Event()
             calls: list[str] = []
 
@@ -1288,6 +1311,85 @@ class HomepageTests(TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(saved_document, original_document)
         self.assertEqual(store.published_colors(), published_colors)
+
+    def test_configuration_save_publishes_open_graph_metadata(self) -> None:
+        values: dict[str, object] = {
+            OpenGraphField.SITE_NAME.value: "APasz Labs",
+            OpenGraphField.TITLE.value: "APasz Studio",
+            OpenGraphField.DESCRIPTION.value: "A custom sharing description.",
+            OpenGraphField.IMAGE_URL.value: "https://example.com/share.png",
+        }
+
+        async def save_open_graph(
+            test_app: FastHTMLApp,
+            access: config_security.ConfigAccess,
+        ) -> tuple[httpx.Response, httpx.Response, httpx.Response]:
+            transport = httpx.ASGITransport(app=test_app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url=CONFIG_TEST_ORIGIN,
+            ) as client:
+                csrf_token = await _authenticate_config_client(client, access)
+                save_response = await client.post(
+                    SiteRoute.CONFIG_OPEN_GRAPH_SAVE.value,
+                    data=_csrf_form_values(values, csrf_token),
+                    headers=_config_headers(csrf_token),
+                    follow_redirects=False,
+                )
+                config_response = await client.get(save_response.headers["location"])
+                homepage_response = await client.get(SiteRoute.HOME.value)
+                return save_response, config_response, homepage_response
+
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "open_graph.json"
+            path.write_text(
+                DEFAULT_OPEN_GRAPH_PATH.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            store = OpenGraphStore(path)
+            published_metadata = store.load()
+            access = _config_access()
+            test_app = _isolated_application(open_graph=store)
+            with patch.object(config_security, "CONFIG_ACCESS", access):
+                save_response, config_response, homepage_response = asyncio.run(
+                    save_open_graph(test_app, access)
+                )
+            saved_metadata = load_open_graph_metadata(path)
+
+        self.assertEqual(save_response.status_code, 303)
+        self.assertEqual(
+            save_response.headers["location"],
+            f"{SiteRoute.CONFIG.value}?open_graph_saved=1",
+        )
+        self.assertIn("Open Graph saved", config_response.text)
+        self.assertIn('value="APasz Studio"', config_response.text)
+        self.assertEqual(saved_metadata, store.published_metadata())
+        self.assertNotEqual(store.published_metadata(), published_metadata)
+        self.assertIn("<title>APasz Studio</title>", homepage_response.text)
+        self.assertIn(
+            '<meta property="og:title" content="APasz Studio">',
+            homepage_response.text,
+        )
+        self.assertIn(
+            '<meta property="og:site_name" content="APasz Labs">',
+            homepage_response.text,
+        )
+        self.assertIn(
+            '<meta property="og:description" content="A custom sharing description.">',
+            homepage_response.text,
+        )
+        self.assertIn(
+            '<meta property="og:image" content="https://example.com/share.png">',
+            homepage_response.text,
+        )
+        self.assertLess(
+            homepage_response.text.index('<meta charset="utf-8">'),
+            homepage_response.text.index('<meta property="og:image"'),
+        )
+        self.assertIn(
+            '<meta name="twitter:card" content="summary_large_image">',
+            homepage_response.text,
+        )
 
 
 async def _unavailable_repository_count(_: str) -> int:

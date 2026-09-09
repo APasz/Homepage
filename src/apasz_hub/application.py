@@ -10,7 +10,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
 from apasz_hub import config_security
-from apasz_hub.components import document_headers
+from apasz_hub.components import document_asset_headers
 from apasz_hub.data import SITE
 from apasz_hub.errors import error_page_response
 from apasz_hub.framework import (
@@ -39,7 +39,7 @@ def create_application(services: ApplicationServices) -> FastHTMLApp:
 
     app = create_app(
         title=SITE.title,
-        headers=document_headers(),
+        headers=document_asset_headers(),
         exception_handlers=_error_handlers(services),
         on_startup=_startup(services),
         on_shutdown=_shutdown(services),
@@ -48,7 +48,7 @@ def create_application(services: ApplicationServices) -> FastHTMLApp:
     app.add_middleware(PublicSiteHeadersMiddleware)
     mount_static_files(app, path="/static", directory=STATIC_DIRECTORY)
     register_public_routes(app, services)
-    register_configuration_authentication_routes(app)
+    register_configuration_authentication_routes(app, services)
     register_configuration_routes(app, services)
     return app
 
@@ -104,6 +104,7 @@ def _public_error_response(
     return error_page_response(
         services.theme_colors.published_colors(),
         status,
+        metadata=services.open_graph.published_metadata(),
         headers=headers,
     )
 
@@ -124,6 +125,7 @@ def _startup(services: ApplicationServices) -> LifecycleHook:
     """Create the application-start hook for one service bundle."""
 
     async def start_application() -> None:
+        services.open_graph.load()
         services.theme_colors.load()
         services.link_cards.load()
         config_security.CONFIG_ACCESS.settings()

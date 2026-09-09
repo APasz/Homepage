@@ -9,21 +9,28 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 
 from apasz_hub import config_security
+from apasz_hub.components import document_metadata
 from apasz_hub.framework import FastHTMLApp, RouteResponse, response_header
 from apasz_hub.middleware import NO_STORE_CACHE_CONTROL
 from apasz_hub.pages import configuration_login_page
 from apasz_hub.routes.paths import SiteRoute
+from apasz_hub.services import ApplicationServices
 
 LOGGER = getLogger(__name__)
 
 
-def register_configuration_authentication_routes(app: FastHTMLApp) -> None:
+def register_configuration_authentication_routes(
+    app: FastHTMLApp,
+    services: ApplicationServices,
+) -> None:
     """Register the configuration session entry and exit points."""
 
     async def config_login(failed: str | None = None) -> RouteResponse:
         """Render the sole-administrator configuration login form."""
 
+        metadata = services.open_graph.published_metadata()
         return (
+            *document_metadata(metadata),
             configuration_login_page(failed=failed == "1"),
             response_header("Cache-Control", NO_STORE_CACHE_CONTROL),
         )

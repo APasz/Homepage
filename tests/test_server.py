@@ -86,10 +86,12 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
         refresher.stop = AsyncMock()
         link_card_store = Mock()
         theme_color_store = Mock()
+        open_graph_store = Mock()
         test_app = create_application(
             ApplicationServices(
                 link_cards=link_card_store,
                 theme_colors=theme_color_store,
+                open_graph=open_graph_store,
                 github_repository_counts=Mock(),
                 github_repository_refresher=refresher,
             ),
@@ -118,6 +120,7 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
         await asyncio.wait_for(lifespan, timeout=1)
 
         theme_color_store.load.assert_called_once_with()
+        open_graph_store.load.assert_called_once_with()
         link_card_store.load.assert_called_once_with()
         refresher.start.assert_called_once_with()
         refresher.stop.assert_awaited_once_with()
