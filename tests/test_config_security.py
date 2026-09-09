@@ -129,7 +129,7 @@ class ConfigSecurityTests(TestCase):
     ) -> None:
         loopback_environment = {
             **TEST_ENVIRONMENT,
-            config_security.PUBLIC_ORIGIN_ENV: "http://127.0.0.1:5001",
+            config_security.PUBLIC_ORIGIN_ENV: "http://127.0.0.1:2036",
             config_security.CONFIG_COOKIE_SECURE_ENV: "false",
         }
         settings = config_security.load_config_security_settings(loopback_environment)

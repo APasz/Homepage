@@ -163,7 +163,7 @@ class SetupCommandTests(TestCase):
                 status = setup.main(
                     (
                         "--origin",
-                        "http://127.0.0.1:5001",
+                        "http://127.0.0.1:2036",
                         "--insecure-cookie",
                     ),
                     password_prompt=_password_prompt((password, password)),

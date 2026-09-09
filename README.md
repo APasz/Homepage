@@ -11,7 +11,7 @@ uv sync --all-groups
 uv run python main.py
 ```
 
-The development server listens on `http://127.0.0.1:5001` by default
+The development server listens on `http://127.0.0.1:2036` by default
 Set `PORT` to override the port
 
 Run the checks with:
@@ -86,7 +86,7 @@ Cookies are HTTPS-only by default. For a loopback HTTP development server only,
 use the explicit local-only option. Never use it in production.
 
 ```bash
-uv run apasz-hub-setup --origin http://127.0.0.1:5001 --insecure-cookie
+uv run apasz-hub-setup --origin http://127.0.0.1:2036 --insecure-cookie
 ```
 
 Every authenticated configuration write verifies both a per-session CSRF token
@@ -127,17 +127,21 @@ Use an absolute path in persistent writable storage.
 Run the production entry point instead:
 
 ```bash
-PORT=5001 HOST=127.0.0.1 uv run python -m apasz_hub.production
+PORT=2036 HOST=127.0.0.1 uv run python -m apasz_hub.production
 ```
 
-Production disables reload, proxy-header trust, and Uvicorn's identifying header
-It binds to loopback by default;
-set `HOST=0.0.0.0` only when a container platform requires it
+Production disables reload and Uvicorn's identifying header. It accepts
+forwarded headers only from a loopback Caddy proxy (`127.0.0.1`), so login
+rate limiting sees the browser's client address. This deployment assumes the
+application port remains loopback-only and is never directly exposed; keep
+`HOST=127.0.0.1` when Caddy runs on the same host.
 
 When a TLS proxy or CDN fronts the site, firewall the application port so the
 origin cannot be reached directly. Set `PUBLIC_ORIGIN` to the public
-HTTPS origin; do not derive it from untrusted request headers. An identity-aware
-proxy with MFA and edge rate limiting can provide an additional admin boundary.
+HTTPS origin; it remains authoritative for CSRF and origin validation. Do not
+derive security decisions from forwarded Host or other request headers. An
+identity-aware proxy with MFA and edge rate limiting can provide an additional
+admin boundary.
 
 Responses use a restrictive CSP and browser-hardening headers
 Card inline styles remain allowed

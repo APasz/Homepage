@@ -21,6 +21,7 @@ from apasz_hub import settings
 DEVELOPMENT_HOST: Final = settings.DEFAULT_HOST
 DEFAULT_PORT: Final = settings.DEFAULT_PORT
 DEFAULT_PRODUCTION_HOST: Final = DEVELOPMENT_HOST
+LOOPBACK_PROXY_IP: Final = "127.0.0.1"
 
 
 class HtmlNode:
@@ -106,24 +107,26 @@ def mount_static_files(app: FastHTMLApp, *, path: str, directory: Path) -> None:
 
 
 def serve_development(appname: str) -> None:
-    """Run the local server with live reload enabled."""
+    """Run the local server with live reload and no proxy-header trust."""
 
     _serve(
         appname=appname,
         host=DEVELOPMENT_HOST,
         port=_server_port(),
+        proxy_headers=False,
         reload=True,
     )
 
 
 def serve_production(appname: str) -> None:
-    """Run the production server without reload or a server-identifying header."""
+    """Run behind the loopback Caddy proxy without reload or a server header."""
 
     _serve(
         appname=appname,
         host=_production_host(),
         port=_server_port(),
-        proxy_headers=False,
+        proxy_headers=True,
+        forwarded_allow_ips=LOOPBACK_PROXY_IP,
         reload=False,
         server_header=False,
     )

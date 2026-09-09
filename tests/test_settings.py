@@ -107,6 +107,7 @@ class ApplicationSettingsTests(TestCase):
     def test_defaults_keep_access_closed_until_both_secrets_are_set(self) -> None:
         settings = load_settings({})
 
+        self.assertEqual(DEFAULT_PORT, 2036)
         self.assertEqual(settings.port, DEFAULT_PORT)
         self.assertEqual(settings.host, DEFAULT_HOST)
         self.assertEqual(settings.public_origin, DEFAULT_PUBLIC_ORIGIN)

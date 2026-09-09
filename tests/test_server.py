@@ -28,14 +28,15 @@ class ServerTests(TestCase):
             appname="main",
             host="127.0.0.1",
             port=5100,
+            proxy_headers=False,
             reload=True,
         )
 
-    def test_production_server_disables_development_features(self) -> None:
+    def test_production_server_trusts_only_loopback_proxy_headers(self) -> None:
         with (
             patch.dict(
                 os.environ,
-                {"HOST": "0.0.0.0", "PORT": "8080"},
+                {"PORT": "8080"},
                 clear=True,
             ),
             patch.object(framework, "_serve") as serve,
@@ -44,9 +45,10 @@ class ServerTests(TestCase):
 
         serve.assert_called_once_with(
             appname="apasz_hub.production",
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=8080,
-            proxy_headers=False,
+            proxy_headers=True,
+            forwarded_allow_ips="127.0.0.1",
             reload=False,
             server_header=False,
         )
