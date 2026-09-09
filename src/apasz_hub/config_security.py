@@ -28,6 +28,7 @@ from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from apasz_hub import settings
+from apasz_hub.middleware import NO_STORE_CACHE_CONTROL
 
 CONFIG_PATH: Final = "/config"
 CONFIG_LOGIN_PATH: Final = f"{CONFIG_PATH}/login"
@@ -334,7 +335,7 @@ class ConfigAccessMiddleware:
                 headers = MutableHeaders(
                     raw=cast(list[tuple[bytes, bytes]], message["headers"]),
                 )
-                headers["Cache-Control"] = "no-store"
+                headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
             await send(message)
 
         settings = CONFIG_ACCESS.settings()

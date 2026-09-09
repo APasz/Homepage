@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from pathlib import Path
@@ -13,13 +12,14 @@ from unittest.mock import patch
 
 import httpx
 
-import apasz_hub.app as application
 from apasz_hub import config_security
 from apasz_hub.app import app
-from apasz_hub.pages import SitePage
+from apasz_hub.application import create_application
+from apasz_hub.framework import FastHTMLApp
+from apasz_hub.routes.paths import SiteRoute
+from apasz_hub.services import create_application_services
 from apasz_hub.theme import (
     DEFAULT_THEME_COLORS_PATH,
-    THEME_COLORS_PATH_ENV,
     ThemeColorStore,
     load_theme_colors,
 )
@@ -58,7 +58,7 @@ async def _login(
     """Authenticate one HTTPS test client and return its CSRF token."""
 
     response = await client.post(
-        SitePage.CONFIG_LOGIN.value,
+        SiteRoute.CONFIG_LOGIN.value,
         data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
         headers={"Origin": TEST_ORIGIN},
         follow_redirects=False,
@@ -106,8 +106,8 @@ class ConfigSecurityTests(TestCase):
                 follow_redirects=False,
             ) as client:
                 return (
-                    await client.get(SitePage.CONFIG.value),
-                    await client.get(SitePage.CONFIG_LOGIN.value),
+                    await client.get(SiteRoute.CONFIG.value),
+                    await client.get(SiteRoute.CONFIG_LOGIN.value),
                 )
 
         with patch.object(
@@ -235,14 +235,14 @@ class ConfigSecurityTests(TestCase):
                 base_url=TEST_ORIGIN,
                 follow_redirects=False,
             ) as client:
-                page = await client.get(SitePage.CONFIG.value)
+                page = await client.get(SiteRoute.CONFIG.value)
                 writes: list[httpx.Response] = []
                 for path in (
-                    SitePage.CONFIG_COLOURS_SAVE.value,
-                    SitePage.CONFIG_LINK_CARDS_DRAFT.value,
-                    SitePage.CONFIG_LINK_CARDS_ADD.value,
-                    SitePage.CONFIG_LINK_CARDS_DELETE.value,
-                    SitePage.CONFIG_LINK_CARDS_SAVE.value,
+                    SiteRoute.CONFIG_COLOURS_SAVE.value,
+                    SiteRoute.CONFIG_LINK_CARDS_DRAFT.value,
+                    SiteRoute.CONFIG_LINK_CARDS_ADD.value,
+                    SiteRoute.CONFIG_LINK_CARDS_DELETE.value,
+                    SiteRoute.CONFIG_LINK_CARDS_SAVE.value,
                 ):
                     writes.append(
                         await client.post(path, headers={"Origin": TEST_ORIGIN})
@@ -254,7 +254,7 @@ class ConfigSecurityTests(TestCase):
             page, writes = asyncio.run(make_requests())
 
         self.assertEqual(page.status_code, 303)
-        self.assertEqual(page.headers["location"], SitePage.CONFIG_LOGIN.value)
+        self.assertEqual(page.headers["location"], SiteRoute.CONFIG_LOGIN.value)
         for response in writes:
             self.assertEqual(response.status_code, 401)
             self.assertEqual(response.headers["cache-control"], "no-store")
@@ -270,16 +270,16 @@ class ConfigSecurityTests(TestCase):
                 follow_redirects=False,
             ) as client:
                 missing_origin = await client.post(
-                    SitePage.CONFIG_LOGIN.value,
+                    SiteRoute.CONFIG_LOGIN.value,
                     data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
                 )
                 invalid_password = await client.post(
-                    SitePage.CONFIG_LOGIN.value,
+                    SiteRoute.CONFIG_LOGIN.value,
                     data={config_security.CONFIG_PASSWORD_FORM_NAME: "incorrect"},
                     headers={"Origin": TEST_ORIGIN},
                 )
                 valid_login = await client.post(
-                    SitePage.CONFIG_LOGIN.value,
+                    SiteRoute.CONFIG_LOGIN.value,
                     data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
                     headers={"Origin": TEST_ORIGIN},
                 )
@@ -288,7 +288,7 @@ class ConfigSecurityTests(TestCase):
         access = _access()
         with (
             patch.object(config_security, "CONFIG_ACCESS", access),
-            self.assertLogs("apasz_hub.app", level="WARNING") as logs,
+            self.assertLogs("apasz_hub.routes.authentication", level="WARNING") as logs,
         ):
             missing_origin, invalid_password, valid_login = asyncio.run(
                 login_requests()
@@ -300,10 +300,10 @@ class ConfigSecurityTests(TestCase):
         self.assertEqual(invalid_password.status_code, 303)
         self.assertEqual(
             invalid_password.headers["location"],
-            f"{SitePage.CONFIG_LOGIN.value}?failed=1",
+            f"{SiteRoute.CONFIG_LOGIN.value}?failed=1",
         )
         self.assertEqual(valid_login.status_code, 303)
-        self.assertEqual(valid_login.headers["location"], SitePage.CONFIG.value)
+        self.assertEqual(valid_login.headers["location"], SiteRoute.CONFIG.value)
         cookie = valid_login.headers["set-cookie"]
         self.assertIn("__Host-apasz-config-session=", cookie)
         self.assertIn("HttpOnly", cookie)
@@ -313,13 +313,15 @@ class ConfigSecurityTests(TestCase):
         self.assertIn("Secure", cookie)
 
     def test_authenticated_writes_require_matching_origin_and_csrf_token(self) -> None:
-        async def make_requests() -> tuple[
+        async def make_requests(
+            test_app: FastHTMLApp,
+        ) -> tuple[
             httpx.Response,
             httpx.Response,
             httpx.Response,
             httpx.Response,
         ]:
-            transport = httpx.ASGITransport(app=app)
+            transport = httpx.ASGITransport(app=test_app)
             async with httpx.AsyncClient(
                 transport=transport,
                 base_url=TEST_ORIGIN,
@@ -327,24 +329,24 @@ class ConfigSecurityTests(TestCase):
             ) as client:
                 token = await _login(client, access)
                 missing_token = await client.post(
-                    SitePage.CONFIG_COLOURS_SAVE.value,
+                    SiteRoute.CONFIG_COLOURS_SAVE.value,
                     data={
                         color.token.value: color.value for color in load_theme_colors()
                     },
                     headers={"Origin": TEST_ORIGIN},
                 )
                 invalid_token = await client.post(
-                    SitePage.CONFIG_COLOURS_SAVE.value,
+                    SiteRoute.CONFIG_COLOURS_SAVE.value,
                     data=_csrf_form("invalid"),
                     headers=_csrf_headers("invalid"),
                 )
                 wrong_origin = await client.post(
-                    SitePage.CONFIG_COLOURS_SAVE.value,
+                    SiteRoute.CONFIG_COLOURS_SAVE.value,
                     data=_csrf_form(token),
                     headers=_csrf_headers(token, origin="https://attacker.example"),
                 )
                 valid = await client.post(
-                    SitePage.CONFIG_COLOURS_SAVE.value,
+                    SiteRoute.CONFIG_COLOURS_SAVE.value,
                     data=_csrf_form(token),
                     headers=_csrf_headers(token),
                 )
@@ -358,13 +360,14 @@ class ConfigSecurityTests(TestCase):
             )
             access = _access()
             theme_color_store = ThemeColorStore(path)
+            test_app = create_application(
+                create_application_services(theme_colors=theme_color_store),
+            )
             with (
-                patch.dict(os.environ, {THEME_COLORS_PATH_ENV: str(path)}),
-                patch.object(application, "THEME_COLOR_STORE", theme_color_store),
                 patch.object(config_security, "CONFIG_ACCESS", access),
             ):
                 missing_token, invalid_token, wrong_origin, valid = asyncio.run(
-                    make_requests()
+                    make_requests(test_app)
                 )
 
         self.assertEqual(missing_token.status_code, 403)
@@ -382,11 +385,11 @@ class ConfigSecurityTests(TestCase):
             ) as client:
                 token = await _login(client, access)
                 logout = await client.post(
-                    SitePage.CONFIG_LOGOUT.value,
+                    SiteRoute.CONFIG_LOGOUT.value,
                     data={config_security.CONFIG_CSRF_FORM_NAME: token},
                     headers=_csrf_headers(token),
                 )
-                page = await client.get(SitePage.CONFIG.value)
+                page = await client.get(SiteRoute.CONFIG.value)
                 return logout, page
 
         access = _access()
@@ -394,10 +397,10 @@ class ConfigSecurityTests(TestCase):
             logout, page = asyncio.run(logout_then_request())
 
         self.assertEqual(logout.status_code, 303)
-        self.assertEqual(logout.headers["location"], SitePage.CONFIG_LOGIN.value)
+        self.assertEqual(logout.headers["location"], SiteRoute.CONFIG_LOGIN.value)
         self.assertIn("Max-Age=0", logout.headers["set-cookie"])
         self.assertEqual(page.status_code, 303)
-        self.assertEqual(page.headers["location"], SitePage.CONFIG_LOGIN.value)
+        self.assertEqual(page.headers["location"], SiteRoute.CONFIG_LOGIN.value)
 
     def test_server_side_sessions_expire_after_the_idle_limit(self) -> None:
         now = 0.0

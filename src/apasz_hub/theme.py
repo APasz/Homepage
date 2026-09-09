@@ -16,6 +16,7 @@ from apasz_hub.json_data import (
     load_json_document,
     write_json_document,
 )
+from apasz_hub.middleware import NO_STORE_CACHE_CONTROL
 
 
 class ThemeColorToken(StrEnum):
@@ -80,7 +81,7 @@ class ThemeColorDataError(ValueError):
 type ThemeColors = tuple[ThemeColor, ...]
 
 THEME_STYLESHEET_URL: Final = "/theme.css"
-THEME_STYLESHEET_CACHE_CONTROL: Final = "no-store"
+THEME_STYLESHEET_CACHE_CONTROL: Final = NO_STORE_CACHE_CONTROL
 DEFAULT_THEME_COLORS_PATH: Final = Path(__file__).with_name("theme_colors.json")
 THEME_COLORS_PATH_ENV: Final = settings.THEME_COLORS_PATH_ENV
 THEME_COLOR_DEFINITIONS: Final[tuple[ThemeColorDefinition, ...]] = (

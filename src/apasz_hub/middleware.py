@@ -32,6 +32,7 @@ SECURITY_HEADERS: Final[tuple[tuple[str, str], ...]] = (
     ("X-Frame-Options", "DENY"),
 )
 STATIC_CACHE_CONTROL: Final = "public, max-age=3600, must-revalidate"
+NO_STORE_CACHE_CONTROL: Final = "no-store"
 STATIC_PATH_PREFIX: Final = "/static/"
 
 

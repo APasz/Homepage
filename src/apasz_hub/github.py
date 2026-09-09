@@ -209,8 +209,3 @@ def _configured_github_logins(cards: tuple[LinkCard, ...]) -> tuple[str, ...]:
             login = card.github_login
             logins.setdefault(_github_login_key(login), login)
     return tuple(logins.values())
-
-
-GITHUB_REPOSITORY_COUNTS: Final = GithubRepositoryCountCache(
-    fetch_public_repository_count
-)

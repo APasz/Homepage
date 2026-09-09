@@ -10,8 +10,22 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from starlette.types import Message, Scope
 
-import apasz_hub.app as application
 from apasz_hub import framework
+from apasz_hub.application import create_application
+from apasz_hub.services import ApplicationServices, create_application_services
+
+
+class ApplicationServicesTests(TestCase):
+    """Keep application instances isolated from one another."""
+
+    def test_application_service_bundles_have_independent_github_caches(self) -> None:
+        first = create_application_services()
+        second = create_application_services()
+
+        self.assertIsNot(
+            first.github_repository_counts,
+            second.github_repository_counts,
+        )
 
 
 class ServerTests(TestCase):
@@ -72,6 +86,14 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
         refresher.stop = AsyncMock()
         link_card_store = Mock()
         theme_color_store = Mock()
+        test_app = create_application(
+            ApplicationServices(
+                link_cards=link_card_store,
+                theme_colors=theme_color_store,
+                github_repository_counts=Mock(),
+                github_repository_refresher=refresher,
+            ),
+        )
 
         async def receive() -> Message:
             return await received.get()
@@ -89,16 +111,11 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
                 "state": {},
             },
         )
-        with (
-            patch.object(application, "LINK_CARD_STORE", link_card_store),
-            patch.object(application, "THEME_COLOR_STORE", theme_color_store),
-            patch.object(application, "GITHUB_REPOSITORY_REFRESHER", refresher),
-        ):
-            lifespan = asyncio.create_task(application.app(scope, receive, send))
-            await received.put({"type": "lifespan.startup"})
-            await asyncio.wait_for(startup_complete.wait(), timeout=1)
-            await received.put({"type": "lifespan.shutdown"})
-            await asyncio.wait_for(lifespan, timeout=1)
+        lifespan = asyncio.create_task(test_app(scope, receive, send))
+        await received.put({"type": "lifespan.startup"})
+        await asyncio.wait_for(startup_complete.wait(), timeout=1)
+        await received.put({"type": "lifespan.shutdown"})
+        await asyncio.wait_for(lifespan, timeout=1)
 
         theme_color_store.load.assert_called_once_with()
         link_card_store.load.assert_called_once_with()

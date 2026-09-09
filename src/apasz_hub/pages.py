@@ -9,8 +9,6 @@ from typing import Final
 from apasz_hub.components import ButtonStyle, button_class, link_card, utility_link
 from apasz_hub.config_security import (
     CONFIG_CSRF_FORM_NAME,
-    CONFIG_LOGIN_PATH,
-    CONFIG_LOGOUT_PATH,
     CONFIG_PASSWORD_FORM_NAME,
 )
 from apasz_hub.data import (
@@ -62,40 +60,22 @@ from apasz_hub.framework import (
     Ul,
 )
 from apasz_hub.github import (
-    GITHUB_REPOSITORY_COUNTS,
     GithubRepositoryCountCache,
     enrich_github_metadata,
 )
+from apasz_hub.routes.paths import SiteRoute
 from apasz_hub.theme import ThemeColor, ThemeColors, theme_color
 
-
-class SitePage(StrEnum):
-    """Pages available in the small public site navigation."""
-
-    HOME = "/"
-    CONFIG = "/config"
-    CONFIG_LOGIN = CONFIG_LOGIN_PATH
-    CONFIG_LOGOUT = CONFIG_LOGOUT_PATH
-    CONFIG_COLOURS_SAVE = "/config/colours"
-    CONFIG_LINK_CARDS_DRAFT = "/config/link-cards/draft"
-    CONFIG_LINK_CARDS_ADD = "/config/link-cards/add"
-    CONFIG_LINK_CARDS_DELETE = "/config/link-cards/delete"
-    CONFIG_LINK_CARDS_SAVE = "/config/link-cards"
-
-
-_SITE_NAVIGATION: Final[tuple[tuple[SitePage, str], ...]] = ((SitePage.HOME, "Home"),)
+_SITE_NAVIGATION: Final[tuple[tuple[SiteRoute, str], ...]] = ((SiteRoute.HOME, "Home"),)
 
 
 async def homepage(
     cards: tuple[LinkCard, ...],
-    repository_counts: GithubRepositoryCountCache | None = None,
+    repository_counts: GithubRepositoryCountCache,
 ) -> HtmlNode:
     """Build the small, single-page public APasz hub."""
 
-    counts = (
-        GITHUB_REPOSITORY_COUNTS if repository_counts is None else repository_counts
-    )
-    cards = await enrich_github_metadata(cards, counts)
+    cards = await enrich_github_metadata(cards, repository_counts)
     return Main(
         Header(
             Div(
@@ -135,7 +115,7 @@ async def homepage(
             ),
             cls="hub-section hub-section--utilities",
         ),
-        _site_footer(SitePage.HOME),
+        _site_footer(SiteRoute.HOME),
         cls="site-shell",
     )
 
@@ -169,7 +149,7 @@ def configuration_page(
                     type="submit",
                     cls=button_class(ButtonStyle.BETA),
                 ),
-                action=SitePage.CONFIG_LOGOUT.value,
+                action=SiteRoute.CONFIG_LOGOUT.value,
                 method="post",
                 cls="config-header__logout",
             ),
@@ -222,7 +202,7 @@ def configuration_page(
                     ),
                     cls="config-actions",
                 ),
-                action=SitePage.CONFIG_COLOURS_SAVE.value,
+                action=SiteRoute.CONFIG_COLOURS_SAVE.value,
                 enctype="application/x-www-form-urlencoded",
                 method="post",
                 data_theme_controls="",
@@ -271,7 +251,7 @@ def configuration_login_page(*, failed: bool = False) -> HtmlNode:
                     ),
                     cls="config-actions config-login__actions",
                 ),
-                action=SitePage.CONFIG_LOGIN.value,
+                action=SiteRoute.CONFIG_LOGIN.value,
                 method="post",
                 cls="config-form",
             ),
@@ -368,7 +348,7 @@ def _link_card_manager(
                     Button(
                         "Add Link",
                         type="submit",
-                        formaction=SitePage.CONFIG_LINK_CARDS_ADD.value,
+                        formaction=SiteRoute.CONFIG_LINK_CARDS_ADD.value,
                         data_link_card_add="",
                         cls=button_class(ButtonStyle.BETA),
                     ),
@@ -381,9 +361,9 @@ def _link_card_manager(
                 ),
                 cls="link-card-actions",
             ),
-            action=SitePage.CONFIG_LINK_CARDS_SAVE.value,
+            action=SiteRoute.CONFIG_LINK_CARDS_SAVE.value,
             data_link_card_controls="",
-            data_link_card_draft_url=SitePage.CONFIG_LINK_CARDS_DRAFT.value,
+            data_link_card_draft_url=SiteRoute.CONFIG_LINK_CARDS_DRAFT.value,
             data_link_card_draft_revision=str(draft_revision),
             enctype="application/x-www-form-urlencoded",
             method="post",
@@ -456,7 +436,7 @@ def _link_card_manager_card(
                 Button(
                     "Delete",
                     type="submit",
-                    formaction=SitePage.CONFIG_LINK_CARDS_DELETE.value,
+                    formaction=SiteRoute.CONFIG_LINK_CARDS_DELETE.value,
                     formnovalidate="",
                     name=LINK_CARD_DELETE_INDEX_FORM_NAME,
                     value=str(index),
@@ -811,7 +791,7 @@ def _link_card_control_attributes(
     return attributes
 
 
-def _site_footer(current_page: SitePage | None = None) -> HtmlNode:
+def _site_footer(current_page: SiteRoute | None = None) -> HtmlNode:
     """Render the shared footer and indicate the active page."""
 
     return Footer(
@@ -832,9 +812,9 @@ def _site_footer(current_page: SitePage | None = None) -> HtmlNode:
 
 
 def _site_navigation_link(
-    page: SitePage,
+    page: SiteRoute,
     label: str,
-    current_page: SitePage | None,
+    current_page: SiteRoute | None,
 ) -> HtmlNode:
     """Build one footer navigation link with its current-page state."""
 

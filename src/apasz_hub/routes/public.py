@@ -1,0 +1,49 @@
+"""Public homepage and theme stylesheet routes."""
+
+from __future__ import annotations
+
+from starlette.responses import Response
+
+from apasz_hub.components import theme_color_meta
+from apasz_hub.framework import FastHTMLApp, RouteResponse, response_header
+from apasz_hub.middleware import NO_STORE_CACHE_CONTROL
+from apasz_hub.pages import homepage
+from apasz_hub.routes.paths import SiteRoute
+from apasz_hub.services import ApplicationServices
+from apasz_hub.theme import (
+    THEME_STYLESHEET_CACHE_CONTROL,
+    THEME_STYLESHEET_URL,
+    theme_stylesheet,
+)
+
+
+def register_public_routes(
+    app: FastHTMLApp,
+    services: ApplicationServices,
+) -> None:
+    """Register routes available without configuration authentication."""
+
+    async def home() -> RouteResponse:
+        """Render the public hub from the published snapshots."""
+
+        colors = services.theme_colors.published_colors()
+        return (
+            theme_color_meta(colors),
+            await homepage(
+                services.link_cards.published_cards(),
+                services.github_repository_counts,
+            ),
+            response_header("Cache-Control", NO_STORE_CACHE_CONTROL),
+        )
+
+    async def theme_css() -> Response:
+        """Serve custom properties from the published palette snapshot."""
+
+        return Response(
+            theme_stylesheet(services.theme_colors.published_colors()),
+            media_type="text/css",
+            headers={"Cache-Control": THEME_STYLESHEET_CACHE_CONTROL},
+        )
+
+    app.get(SiteRoute.HOME.value)(home)
+    app.get(THEME_STYLESHEET_URL)(theme_css)
