@@ -61,7 +61,7 @@ class GithubRepositoryCountCache:
 
 
 class GithubRepositoryCountRefresher:
-    """Periodically refresh configured GitHub profiles without HTTP page traffic."""
+    """Refresh configured GitHub profiles outside HTTP page traffic."""
 
     def __init__(
         self,
@@ -77,30 +77,41 @@ class GithubRepositoryCountRefresher:
         self._load_cards = load_cards
         self._interval_seconds = interval.total_seconds()
         self._sleep = sleep
-        self._task: asyncio.Task[None] | None = None
+        self._periodic_task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     def start(self) -> None:
         """Start the periodic refresher in the current application event loop."""
 
-        if self._task is not None:
+        if self._periodic_task is not None:
             raise RuntimeError("GitHub repository refresher is already running.")
-        self._task = asyncio.create_task(
+        self._periodic_task = asyncio.create_task(
             self._refresh_forever(),
             name="github-repository-count-refresher",
         )
 
-    async def stop(self) -> None:
-        """Cancel and await the periodic refresher during application shutdown."""
+    def refresh_in_background(self) -> None:
+        """Schedule one configured-profile refresh without delaying a caller."""
 
-        task = self._task
-        if task is None:
-            return
-        self._task = None
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        task = asyncio.create_task(
+            self._refresh_safely(),
+            name="github-repository-count-publish-refresh",
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def stop(self) -> None:
+        """Cancel and await all refresh work during application shutdown."""
+
+        periodic_task = self._periodic_task
+        self._periodic_task = None
+        tasks = tuple(self._background_tasks)
+        if periodic_task is not None:
+            tasks = (periodic_task, *tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def refresh(self) -> None:
         """Refresh every unique GitHub profile in the current card configuration."""
@@ -110,13 +121,16 @@ class GithubRepositoryCountRefresher:
 
     async def _refresh_forever(self) -> None:
         while True:
-            try:
-                await self.refresh()
-            except Exception:
-                LOGGER.exception(
-                    "Unable to refresh configured GitHub repository counts."
-                )
+            await self._refresh_safely()
             await self._sleep(self._interval_seconds)
+
+    async def _refresh_safely(self) -> None:
+        """Log an unexpected refresh failure without ending background work."""
+
+        try:
+            await self.refresh()
+        except Exception:
+            LOGGER.exception("Unable to refresh configured GitHub repository counts.")
 
 
 async def fetch_public_repository_count(login: str) -> int:

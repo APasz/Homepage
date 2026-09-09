@@ -142,6 +142,7 @@ def _isolated_application(
     *,
     link_cards: LinkCardStore | None = None,
     theme_colors: ThemeColorStore | None = None,
+    github_repository_counts: GithubRepositoryCountCache | None = None,
 ) -> FastHTMLApp:
     """Build an application whose mutable collaborators belong to one test."""
 
@@ -149,7 +150,11 @@ def _isolated_application(
         create_application_services(
             link_cards=link_cards,
             theme_colors=theme_colors,
-            github_repository_counts=_repository_count_cache(),
+            github_repository_counts=(
+                _repository_count_cache()
+                if github_repository_counts is None
+                else github_repository_counts
+            ),
         ),
     )
 
@@ -735,6 +740,141 @@ class HomepageTests(TestCase):
         self.assertIn(draft_title, published_after_save.text)
         self.assertEqual(saved_cards[0].title, draft_title)
         self.assertFalse(store.is_draft_dirty)
+
+    def test_publishing_link_cards_refreshes_current_github_cards_in_background(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            path.write_text(
+                DEFAULT_LINK_CARDS_PATH.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            store = LinkCardStore(path)
+            cards = store.load()
+            github_index = next(
+                index
+                for index, card in enumerate(cards)
+                if card.schema is CardKind.GITHUB
+            )
+            values = link_card_form_values(cards)
+            values[
+                link_card_form_name(
+                    github_index,
+                    LinkCardFormField.DESTINATION,
+                )
+            ] = "octocat"
+            calls: list[str] = []
+            refresh_started = asyncio.Event()
+            release_refresh = asyncio.Event()
+            refresh_finished = asyncio.Event()
+
+            async def fetch_count(login: str) -> int:
+                calls.append(login)
+                refresh_started.set()
+                await release_refresh.wait()
+                refresh_finished.set()
+                return 42
+
+            async def publish_and_render(
+                test_app: FastHTMLApp,
+                access: config_security.ConfigAccess,
+            ) -> tuple[httpx.Response, httpx.Response]:
+                transport = httpx.ASGITransport(app=test_app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url=CONFIG_TEST_ORIGIN,
+                ) as client:
+                    csrf_token = await _authenticate_config_client(client, access)
+                    save_response = await client.post(
+                        SiteRoute.CONFIG_LINK_CARDS_SAVE.value,
+                        data=_csrf_form_values(values, csrf_token),
+                        headers=_config_headers(csrf_token),
+                        follow_redirects=False,
+                    )
+                    await asyncio.wait_for(refresh_started.wait(), timeout=1)
+                    release_refresh.set()
+                    await asyncio.wait_for(refresh_finished.wait(), timeout=1)
+                    return save_response, await client.get(SiteRoute.HOME.value)
+
+            access = _config_access()
+            test_app = _isolated_application(
+                link_cards=store,
+                github_repository_counts=GithubRepositoryCountCache(fetch_count),
+            )
+            with patch.object(config_security, "CONFIG_ACCESS", access):
+                save_response, homepage_response = asyncio.run(
+                    publish_and_render(test_app, access),
+                )
+
+        self.assertEqual(save_response.status_code, 303)
+        self.assertEqual(calls, ["octocat"])
+        self.assertEqual(store.published_cards()[github_index].github_login, "octocat")
+        self.assertIn("42 Repositories", homepage_response.text)
+
+    def test_failed_publish_refresh_keeps_configured_github_metadata(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            path.write_text(
+                DEFAULT_LINK_CARDS_PATH.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            store = LinkCardStore(path)
+            cards = store.load()
+            github_index = next(
+                index
+                for index, card in enumerate(cards)
+                if card.schema is CardKind.GITHUB
+            )
+            configured_metadata = "Configured fallback metadata"
+            values = link_card_form_values(cards)
+            values[
+                link_card_form_name(github_index, LinkCardFormField.METADATA)
+            ] = configured_metadata
+            refresh_attempted = asyncio.Event()
+            calls: list[str] = []
+
+            async def fetch_count(login: str) -> int:
+                calls.append(login)
+                refresh_attempted.set()
+                raise GithubRepositoryCountUnavailable("GitHub is unavailable.")
+
+            async def publish_and_render(
+                test_app: FastHTMLApp,
+                access: config_security.ConfigAccess,
+            ) -> tuple[httpx.Response, httpx.Response]:
+                transport = httpx.ASGITransport(app=test_app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url=CONFIG_TEST_ORIGIN,
+                ) as client:
+                    csrf_token = await _authenticate_config_client(client, access)
+                    save_response = await client.post(
+                        SiteRoute.CONFIG_LINK_CARDS_SAVE.value,
+                        data=_csrf_form_values(values, csrf_token),
+                        headers=_config_headers(csrf_token),
+                        follow_redirects=False,
+                    )
+                    await asyncio.wait_for(refresh_attempted.wait(), timeout=1)
+                    return save_response, await client.get(SiteRoute.HOME.value)
+
+            access = _config_access()
+            test_app = _isolated_application(
+                link_cards=store,
+                github_repository_counts=GithubRepositoryCountCache(fetch_count),
+            )
+            with patch.object(config_security, "CONFIG_ACCESS", access):
+                save_response, homepage_response = asyncio.run(
+                    publish_and_render(test_app, access),
+                )
+
+        self.assertEqual(save_response.status_code, 303)
+        self.assertEqual(calls, ["apasz"])
+        self.assertEqual(
+            store.published_cards()[github_index].metadata,
+            configured_metadata,
+        )
+        self.assertIn(configured_metadata, homepage_response.text)
 
     def test_add_link_card_adds_an_unpublished_draft_entry(self) -> None:
         with TemporaryDirectory() as temporary_directory:

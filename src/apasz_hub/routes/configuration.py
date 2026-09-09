@@ -124,6 +124,7 @@ def register_configuration_routes(
             services.link_cards.save_draft()
         except LinkCardDataError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        services.github_repository_refresher.refresh_in_background()
         _log_configuration_change(request, "published link cards")
         return RedirectResponse(
             f"{SiteRoute.CONFIG.value}?link_cards_saved=1",

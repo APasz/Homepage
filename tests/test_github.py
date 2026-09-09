@@ -164,6 +164,40 @@ class GithubRepositoryCountTests(IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_stop_cancels_an_in_flight_one_off_refresh(self) -> None:
+        refresh_started = asyncio.Event()
+        refresh_cancelled = asyncio.Event()
+
+        async def fetch_count(_: str) -> int:
+            refresh_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                refresh_cancelled.set()
+                raise
+            return 7
+
+        github_card = LinkCard(
+            title="GitHub",
+            href="https://github.com/APasz",
+            tier=CardTier.FEATURED,
+            icon="/static/icons/github.svg",
+            metadata="Fallback metadata",
+            schema=CardKind.GITHUB,
+        )
+        refresher = GithubRepositoryCountRefresher(
+            GithubRepositoryCountCache(fetch_count),
+            lambda: (github_card,),
+        )
+
+        refresher.refresh_in_background()
+        try:
+            await asyncio.wait_for(refresh_started.wait(), timeout=1)
+        finally:
+            await refresher.stop()
+
+        self.assertTrue(refresh_cancelled.is_set())
+
     async def test_enrichment_replaces_only_github_card_metadata(self) -> None:
         async def fetch_count(login: str) -> int:
             self.assertEqual(login, "apasz")
