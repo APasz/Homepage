@@ -13,6 +13,9 @@ class SiteRoute(StrEnum):
     """Named HTTP paths used by pages and route handlers."""
 
     HOME = "/"
+    HEALTHZ = "/healthz"
+    NOT_FOUND = "/404"
+    INTERNAL_SERVER_ERROR = "/500"
     CONFIG = CONFIG_PATH
     CONFIG_LOGIN = CONFIG_LOGIN_PATH
     CONFIG_LOGOUT = CONFIG_LOGOUT_PATH

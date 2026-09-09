@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Final, Protocol, cast
 
 from fasthtml import common as fh
+from starlette.requests import Request
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Receive, Scope, Send
@@ -32,14 +33,22 @@ class ResponseHeader:
     """Opaque HTTP header returned alongside a FastHTML page node."""
 
 
+class PageResponse:
+    """Opaque FastHTML response with an explicitly selected HTTP status."""
+
+
 type HtmlChild = HtmlNode | str
 type RouteContent = HtmlNode | ResponseHeader
-type RouteResponse = RouteContent | tuple[RouteContent, ...] | Response
+type RouteResponse = RouteContent | tuple[RouteContent, ...] | PageResponse | Response
 type RouteHandler[**Parameters] = Callable[Parameters, Awaitable[RouteResponse]]
 type RouteDecorator[**Parameters] = Callable[
     [RouteHandler[Parameters]], RouteHandler[Parameters]
 ]
 type LifecycleHook = Callable[[], Awaitable[None]]
+type ExceptionHandlerKey = int | type[Exception]
+type ErrorHandler = Callable[
+    [Request, Exception], RouteResponse | Awaitable[RouteResponse]
+]
 
 
 class Component(Protocol):
@@ -78,6 +87,7 @@ def create_app(
     *,
     title: str,
     headers: tuple[HtmlNode, ...],
+    exception_handlers: dict[ExceptionHandlerKey, ErrorHandler] | None = None,
     on_startup: LifecycleHook | None = None,
     on_shutdown: LifecycleHook | None = None,
 ) -> FastHTMLApp:
@@ -88,6 +98,7 @@ def create_app(
         fh.FastHTML(
             title=title,
             hdrs=headers,
+            exception_handlers=exception_handlers,
             on_startup=on_startup,
             on_shutdown=on_shutdown,
             default_hdrs=False,
@@ -162,6 +173,15 @@ def response_header(name: str, value: str) -> ResponseHeader:
     return cast(ResponseHeader, fh.HttpHeader(name, value))
 
 
+def page_response(
+    *content: RouteContent,
+    status_code: int,
+) -> PageResponse:
+    """Wrap FastHTML page content in a response with an explicit status code."""
+
+    return cast(PageResponse, fh.FtResponse(content, status_code=status_code))
+
+
 def _component(value: object) -> Component:
     """Expose a dynamic FastHTML component through the typed tag contract."""
 
@@ -197,4 +217,5 @@ Span: Component = _component(fh.Span)
 Source: Component = _component(fh.Source)
 Summary: Component = _component(fh.Summary)
 Textarea: Component = _component(fh.Textarea)
+Title: Component = _component(fh.Title)
 Ul: Component = _component(fh.Ul)

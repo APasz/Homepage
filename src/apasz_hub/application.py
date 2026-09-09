@@ -5,16 +5,25 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse, Response
+
 from apasz_hub import config_security
 from apasz_hub.components import document_headers
 from apasz_hub.data import SITE
+from apasz_hub.errors import error_page_response
 from apasz_hub.framework import (
+    ErrorHandler,
+    ExceptionHandlerKey,
     FastHTMLApp,
     LifecycleHook,
+    PageResponse,
     create_app,
     mount_static_files,
 )
 from apasz_hub.middleware import PublicSiteHeadersMiddleware
+from apasz_hub.pages import ErrorPageStatus
 from apasz_hub.routes.authentication import (
     register_configuration_authentication_routes,
 )
@@ -31,6 +40,7 @@ def create_application(services: ApplicationServices) -> FastHTMLApp:
     app = create_app(
         title=SITE.title,
         headers=document_headers(),
+        exception_handlers=_error_handlers(services),
         on_startup=_startup(services),
         on_shutdown=_shutdown(services),
     )
@@ -41,6 +51,73 @@ def create_application(services: ApplicationServices) -> FastHTMLApp:
     register_configuration_authentication_routes(app)
     register_configuration_routes(app, services)
     return app
+
+
+def _error_handlers(
+    services: ApplicationServices,
+) -> dict[ExceptionHandlerKey, ErrorHandler]:
+    """Build full-document handlers for the public HTTP failure pages."""
+
+    handlers: dict[ExceptionHandlerKey, ErrorHandler] = {
+        status.value: _error_handler(services, status) for status in ErrorPageStatus
+    }
+    handlers[HTTPException] = _http_exception_handler(services)
+    return handlers
+
+
+def _error_handler(
+    services: ApplicationServices,
+    status: ErrorPageStatus,
+) -> ErrorHandler:
+    """Build one palette-aware FastHTML exception handler."""
+
+    def handle(_request: Request, exception: Exception) -> PageResponse:
+        http_exception = exception if isinstance(exception, HTTPException) else None
+        return _public_error_response(services, status, http_exception)
+
+    return handle
+
+
+def _http_exception_handler(services: ApplicationServices) -> ErrorHandler:
+    """Build the handler that upgrades declared public 404 and 500 errors."""
+
+    def handle(_request: Request, exception: Exception) -> PageResponse | Response:
+        if not isinstance(exception, HTTPException):
+            raise TypeError("HTTP exception handler received a non-HTTP exception.")
+        try:
+            status = ErrorPageStatus(exception.status_code)
+        except ValueError:
+            return _default_http_exception_response(exception)
+        return _public_error_response(services, status, exception)
+
+    return handle
+
+
+def _public_error_response(
+    services: ApplicationServices,
+    status: ErrorPageStatus,
+    exception: HTTPException | None = None,
+) -> PageResponse:
+    """Build an error page while retaining declared HTTP headers."""
+
+    headers = None if exception is None else exception.headers
+    return error_page_response(
+        services.theme_colors.published_colors(),
+        status,
+        headers=headers,
+    )
+
+
+def _default_http_exception_response(exception: HTTPException) -> Response:
+    """Match Starlette's response behavior for statuses without a public page."""
+
+    if exception.status_code in {204, 304}:
+        return Response(status_code=exception.status_code, headers=exception.headers)
+    return PlainTextResponse(
+        exception.detail,
+        status_code=exception.status_code,
+        headers=exception.headers,
+    )
 
 
 def _startup(services: ApplicationServices) -> LifecycleHook:

@@ -84,6 +84,7 @@ THEME_STYLESHEET_URL: Final = "/theme.css"
 THEME_STYLESHEET_CACHE_CONTROL: Final = NO_STORE_CACHE_CONTROL
 DEFAULT_THEME_COLORS_PATH: Final = Path(__file__).with_name("theme_colors.json")
 THEME_COLORS_PATH_ENV: Final = settings.THEME_COLORS_PATH_ENV
+ERROR_COLOUR: Final = "#ef4444"
 THEME_COLOR_DEFINITIONS: Final[tuple[ThemeColorDefinition, ...]] = (
     ThemeColorDefinition(ThemeColorToken.CANVAS, "Canvas"),
     ThemeColorDefinition(ThemeColorToken.SURFACE, "Surface"),
@@ -208,6 +209,7 @@ def theme_stylesheet(colors: ThemeColors) -> str:
     shadow = theme_color(colors, ThemeColorToken.SHADOW)
     return (
         f":root {{\n{declarations}\n"
+        f"    --color-error: {ERROR_COLOUR};\n"
         f"    --shadow: {_shadow_css_value(shadow.value)};\n"
         "}\n"
     )

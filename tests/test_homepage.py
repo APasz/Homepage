@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import asyncio
 from base64 import urlsafe_b64encode
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Never
 from unittest import TestCase
 from unittest.mock import patch
 
 import httpx
+from starlette.exceptions import HTTPException
 
 try:
     import uvloop
@@ -35,6 +37,7 @@ from apasz_hub.data import (
     LINK_CARD_DELETE_INDEX_FORM_NAME,
     PROFILE_IMAGE_URL,
     PROFILE_REDUCED_MOTION_IMAGE_URL,
+    SITE,
     SITE_SCRIPT_URL,
     SITE_STYLESHEET_URL,
     WORDMARK_URL,
@@ -57,8 +60,10 @@ from apasz_hub.middleware import (
     STATIC_CACHE_CONTROL,
 )
 from apasz_hub.pages import (
+    ErrorPageStatus,
     configuration_login_page,
     configuration_page,
+    error_page,
     homepage,
 )
 from apasz_hub.routes.configuration import LINK_CARD_DRAFT_REVISION_HEADER
@@ -66,6 +71,7 @@ from apasz_hub.routes.paths import SiteRoute
 from apasz_hub.services import create_application_services
 from apasz_hub.theme import (
     DEFAULT_THEME_COLORS_PATH,
+    ERROR_COLOUR,
     THEME_STYLESHEET_CACHE_CONTROL,
     THEME_STYLESHEET_URL,
     ThemeColorStore,
@@ -193,9 +199,35 @@ def _run_application_responses() -> tuple[
 
     access = _config_access()
     with patch.object(config_security, "CONFIG_ACCESS", access):
-        if uvloop is None:
-            return asyncio.run(_application_responses(access))
-        return uvloop.run(_application_responses(access))
+        return _run_test_coroutine(_application_responses(access))
+
+
+def _run_test_coroutine[Result](
+    coroutine: Coroutine[object, object, Result],
+) -> Result:
+    """Run a test coroutine on the event loop available to Uvicorn."""
+
+    if uvloop is None:
+        return asyncio.run(coroutine)
+    return uvloop.run(coroutine)
+
+
+async def _get_responses(
+    test_app: FastHTMLApp,
+    *paths: str,
+    raise_app_exceptions: bool = True,
+) -> list[httpx.Response]:
+    """Request public paths from one isolated ASGI application."""
+
+    transport = httpx.ASGITransport(
+        app=test_app,
+        raise_app_exceptions=raise_app_exceptions,
+    )
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url=CONFIG_TEST_ORIGIN,
+    ) as client:
+        return [await client.get(path) for path in paths]
 
 
 class HomepageTests(TestCase):
@@ -510,6 +542,11 @@ class HomepageTests(TestCase):
             str(int(shadow.value[index : index + 2], 16)) for index in (1, 3, 5)
         )
         self.assertIn("--shadow-opacity: 34%;", stylesheet)
+        self.assertIn("background: var(--color-error);", stylesheet)
+        self.assertIn(
+            f"--color-error: {ERROR_COLOUR};",
+            theme_stylesheet(colors),
+        )
         self.assertIn(
             f"--shadow: rgb({shadow_channels} / var(--shadow-opacity));",
             theme_stylesheet(colors),
@@ -600,6 +637,142 @@ class HomepageTests(TestCase):
             theme_response.headers["cache-control"],
             THEME_STYLESHEET_CACHE_CONTROL,
         )
+
+    def test_health_check_reports_application_liveness(self) -> None:
+        (response,) = _run_test_coroutine(
+            _get_responses(_isolated_application(), SiteRoute.HEALTHZ.value)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, "ok")
+        self.assertTrue(response.headers["content-type"].startswith("text/plain"))
+        self.assertEqual(response.headers["cache-control"], NO_STORE_CACHE_CONTROL)
+
+    def test_not_found_response_uses_the_public_error_page(self) -> None:
+        (response,) = _run_test_coroutine(
+            _get_responses(_isolated_application(), "/missing-page")
+        )
+
+        self.assertEqual(response.status_code, ErrorPageStatus.NOT_FOUND.value)
+        self.assertIn("Page not found", response.text)
+        self.assertIn('class="error-page__panel"', response.text)
+        self.assertIn('href="/"', response.text)
+        self.assertNotIn("404 Not Found", response.text)
+        self.assertEqual(response.headers["cache-control"], NO_STORE_CACHE_CONTROL)
+        for header, value in SECURITY_HEADERS:
+            self.assertEqual(response.headers[header], value)
+
+    def test_error_pages_are_available_at_their_canonical_paths(self) -> None:
+        not_found_response, server_error_response = _run_test_coroutine(
+            _get_responses(
+                _isolated_application(),
+                SiteRoute.NOT_FOUND.value,
+                SiteRoute.INTERNAL_SERVER_ERROR.value,
+            )
+        )
+
+        expected_responses = (
+            (
+                not_found_response,
+                ErrorPageStatus.NOT_FOUND,
+                "Page not found",
+            ),
+            (
+                server_error_response,
+                ErrorPageStatus.INTERNAL_SERVER_ERROR,
+                "Something went wrong",
+            ),
+        )
+        for response, status, heading in expected_responses:
+            self.assertEqual(response.status_code, status.value)
+            self.assertIn(heading, response.text)
+            self.assertIn(
+                f"<title>{status.value} · {SITE.title}</title>",
+                response.text,
+            )
+            self.assertEqual(response.headers["cache-control"], NO_STORE_CACHE_CONTROL)
+            for header, value in SECURITY_HEADERS:
+                self.assertEqual(response.headers[header], value)
+
+    def test_error_response_handlers_use_the_public_error_page(self) -> None:
+        async def broken_endpoint() -> Never:
+            raise RuntimeError("Intentional error page test failure.")
+
+        async def declared_error_endpoint() -> Never:
+            raise HTTPException(
+                status_code=ErrorPageStatus.INTERNAL_SERVER_ERROR.value,
+                detail="Intentional declared error page test failure.",
+                headers={"Retry-After": "60"},
+            )
+
+        async def declared_not_found_endpoint() -> Never:
+            raise HTTPException(
+                status_code=ErrorPageStatus.NOT_FOUND.value,
+                detail="Intentional declared not-found page test failure.",
+                headers={"X-Error-Source": "declared"},
+            )
+
+        test_app = _isolated_application()
+        test_app.get("/error-page-test")(broken_endpoint)
+        test_app.get("/declared-error-page-test")(declared_error_endpoint)
+        test_app.get("/declared-not-found-page-test")(declared_not_found_endpoint)
+        responses = _run_test_coroutine(
+            _get_responses(
+                test_app,
+                "/error-page-test",
+                "/declared-error-page-test",
+                "/declared-not-found-page-test",
+                raise_app_exceptions=False,
+            )
+        )
+
+        expected_responses = (
+            (
+                responses[0],
+                ErrorPageStatus.INTERNAL_SERVER_ERROR,
+                "Something went wrong",
+            ),
+            (
+                responses[1],
+                ErrorPageStatus.INTERNAL_SERVER_ERROR,
+                "Something went wrong",
+            ),
+            (
+                responses[2],
+                ErrorPageStatus.NOT_FOUND,
+                "Page not found",
+            ),
+        )
+        for response, status, heading in expected_responses:
+            self.assertEqual(response.status_code, status.value)
+            self.assertIn(heading, response.text)
+            self.assertIn('class="error-page__panel"', response.text)
+            self.assertEqual(response.headers["cache-control"], NO_STORE_CACHE_CONTROL)
+            for header, value in SECURITY_HEADERS:
+                self.assertEqual(response.headers[header], value)
+        self.assertNotIn("Intentional error page test failure.", responses[0].text)
+        self.assertNotIn(
+            "Intentional declared error page test failure.",
+            responses[1].text,
+        )
+        self.assertEqual(responses[1].headers["retry-after"], "60")
+        self.assertNotIn(
+            "Intentional declared not-found page test failure.",
+            responses[2].text,
+        )
+        self.assertEqual(responses[2].headers["x-error-source"], "declared")
+
+    def test_error_page_copy_and_statuses_are_explicit(self) -> None:
+        not_found_document = render(*error_page(ErrorPageStatus.NOT_FOUND))
+        server_error_document = render(
+            *error_page(ErrorPageStatus.INTERNAL_SERVER_ERROR)
+        )
+
+        self.assertIn(f"404 · {SITE.title}", not_found_document)
+        self.assertIn("Not found", not_found_document)
+        self.assertIn(f"500 · {SITE.title}", server_error_document)
+        self.assertIn("Server error", server_error_document)
+        self.assertIn("Back to home", server_error_document)
 
     def test_malformed_manual_theme_edit_keeps_public_responses_available(
         self,
