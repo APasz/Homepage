@@ -1,4 +1,4 @@
-"""Typed application settings loaded from a local dotenv file or environment."""
+"""Typed application settings loaded from the repository dotenv file or environment."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ CONFIG_COOKIE_SECURE_ENV: Final = "CONFIG_COOKIE_SECURE"
 DEFAULT_PORT: Final = 5001
 DEFAULT_HOST: Final = "127.0.0.1"
 DEFAULT_PUBLIC_ORIGIN: Final = "https://apasz.com"
+PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
+DOTENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
 
 _FIELD_ENV_NAMES: Final = {
     "port": PORT_ENV,
@@ -41,7 +43,7 @@ class ApplicationSettings(BaseSettings):
     """Validated runtime configuration for the single deployed application."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=DOTENV_PATH,
         env_file_encoding="utf-8",
         extra="forbid",
         frozen=True,
@@ -146,7 +148,7 @@ class ApplicationSettings(BaseSettings):
 def load_settings(
     environment: Mapping[str, str] | None = None,
 ) -> ApplicationSettings:
-    """Load settings from ``.env`` and the process, or an isolated test mapping."""
+    """Load settings from the repository dotenv and process, or a test mapping."""
 
     try:
         if environment is None:

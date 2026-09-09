@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from contextlib import chdir
+from collections.abc import Generator
+from contextlib import chdir, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -19,35 +20,65 @@ from apasz_hub.settings import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_PUBLIC_ORIGIN,
+    DOTENV_PATH,
     HOST_ENV,
     PORT_ENV,
+    PROJECT_ROOT,
     PUBLIC_ORIGIN_ENV,
+    ApplicationSettings,
     SettingsValidationError,
     load_settings,
 )
 
 
+@contextmanager
+def _temporary_dotenv(document: str) -> Generator[None]:
+    """Configure an absolute test dotenv while the process uses another cwd."""
+
+    with TemporaryDirectory() as temporary_directory:
+        project_directory = Path(temporary_directory)
+        dotenv_path = project_directory / ".env"
+        working_directory = project_directory / "service"
+        working_directory.mkdir()
+        dotenv_path.write_text(document, encoding="utf-8")
+        with (
+            chdir(working_directory),
+            patch.dict(
+                ApplicationSettings.model_config,
+                {"env_file": dotenv_path},
+            ),
+        ):
+            yield
+
+
 class ApplicationSettingsTests(TestCase):
     """Keep dotenv configuration concise, typed, and predictable."""
+
+    def test_dotenv_path_is_anchored_at_the_project_root(self) -> None:
+        self.assertTrue(DOTENV_PATH.is_absolute())
+        self.assertEqual(DOTENV_PATH, PROJECT_ROOT / ".env")
+        self.assertEqual(ApplicationSettings.model_config.get("env_file"), DOTENV_PATH)
 
     def test_dotenv_loads_short_names_without_expanding_an_argon_hash(self) -> None:
         password_hash = "$argon2id$v=19$m=19456,t=2,p=1$salt$hash"
         session_secret = "s" * 43
-        with TemporaryDirectory() as temporary_directory:
-            dotenv_path = Path(temporary_directory) / ".env"
-            dotenv_path.write_text(
-                "\n".join(
-                    (
-                        f"{CONFIG_PASSWORD_HASH_ENV}={password_hash}",
-                        f"{CONFIG_SESSION_SECRET_ENV}={session_secret}",
-                        f"{PUBLIC_ORIGIN_ENV}=https://admin.example",
-                        f"{CONFIG_COOKIE_SECURE_ENV}=true",
-                    )
-                ),
-                encoding="utf-8",
+        dotenv_document = "\n".join(
+            (
+                f"{CONFIG_PASSWORD_HASH_ENV}={password_hash}",
+                f"{CONFIG_SESSION_SECRET_ENV}={session_secret}",
+                f"{PUBLIC_ORIGIN_ENV}=https://admin.example",
+                f"{CONFIG_COOKIE_SECURE_ENV}=true",
             )
-            with chdir(temporary_directory), patch.dict(os.environ, {}, clear=True):
-                settings = load_settings()
+        )
+        with (
+            _temporary_dotenv(dotenv_document),
+            patch.dict(
+                os.environ,
+                {},
+                clear=True,
+            ),
+        ):
+            settings = load_settings()
 
         configured_hash = settings.config_password_hash
         configured_secret = settings.config_session_secret
@@ -61,14 +92,15 @@ class ApplicationSettingsTests(TestCase):
         self.assertTrue(settings.config_cookie_secure)
 
     def test_process_environment_overrides_dotenv_values(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            dotenv_path = Path(temporary_directory) / ".env"
-            dotenv_path.write_text(f"{PORT_ENV}=6000", encoding="utf-8")
-            with (
-                chdir(temporary_directory),
-                patch.dict(os.environ, {PORT_ENV: "7000"}, clear=True),
-            ):
-                settings = load_settings()
+        with (
+            _temporary_dotenv(f"{PORT_ENV}=6000"),
+            patch.dict(
+                os.environ,
+                {PORT_ENV: "7000"},
+                clear=True,
+            ),
+        ):
+            settings = load_settings()
 
         self.assertEqual(settings.port, 7000)
 
@@ -104,15 +136,12 @@ class ApplicationSettingsTests(TestCase):
         self.assertIsNone(raised.exception.__cause__)
 
     def test_unknown_dotenv_setting_fails_loudly(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            dotenv_path = Path(temporary_directory) / ".env"
-            dotenv_path.write_text("TYPOGRAPHICAL_SETTING=value", encoding="utf-8")
-            with (
-                chdir(temporary_directory),
-                patch.dict(os.environ, {}, clear=True),
-                self.assertRaises(SettingsValidationError),
-            ):
-                load_settings()
+        with (
+            _temporary_dotenv("TYPOGRAPHICAL_SETTING=value"),
+            patch.dict(os.environ, {}, clear=True),
+            self.assertRaises(SettingsValidationError),
+        ):
+            load_settings()
 
     def test_settings_source_failures_are_safe_and_consistent(self) -> None:
         with (

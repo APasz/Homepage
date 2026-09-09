@@ -22,11 +22,11 @@ from apasz_hub.settings import (
     CONFIG_PASSWORD_HASH_ENV,
     CONFIG_SESSION_SECRET_ENV,
     DEFAULT_PUBLIC_ORIGIN,
+    DOTENV_PATH,
+    PROJECT_ROOT,
     PUBLIC_ORIGIN_ENV,
 )
 
-PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
-DOTENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
 DOTENV_FILE_MODE: Final[int] = stat.S_IRUSR | stat.S_IWUSR
 
 type PasswordPrompt = Callable[[str], str]

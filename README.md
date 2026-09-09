@@ -73,8 +73,9 @@ settings in it first. [.env.example](.env.example) remains available for a
 manual setup.
 
 A partial or invalid access configuration leaves `/config` closed and records a
-startup error. The app reads `.env` with Pydantic Settings and rejects unknown
-dotenv names, so typos fail loudly instead of being silently ignored.
+startup error. The app reads the repository-root `.env` with Pydantic Settings,
+independent of the service working directory, and rejects unknown dotenv names,
+so typos fail loudly instead of being silently ignored.
 
 Never commit `.env`; it is ignored by Git. A successful login creates a
 server-side session with a 30-minute idle lifetime and an eight-hour absolute

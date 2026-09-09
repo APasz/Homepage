@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Iterator
-from contextlib import chdir, redirect_stderr, redirect_stdout
+from collections.abc import Generator, Iterator
+from contextlib import chdir, contextmanager, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-from apasz_hub import config_security, setup
+from apasz_hub import config_security, settings, setup
 from apasz_hub.settings import (
     CONFIG_COOKIE_SECURE_ENV,
     CONFIG_PASSWORD_HASH_ENV,
@@ -32,6 +32,20 @@ def _password_prompt(values: tuple[str, ...]) -> setup.PasswordPrompt:
     return prompt
 
 
+@contextmanager
+def _temporary_setup_dotenv(dotenv_path: Path) -> Generator[None]:
+    """Point setup and settings at the same isolated dotenv file."""
+
+    with (
+        patch.object(setup, "DOTENV_PATH", dotenv_path),
+        patch.dict(
+            settings.ApplicationSettings.model_config,
+            {"env_file": dotenv_path},
+        ),
+    ):
+        yield
+
+
 class SetupCommandTests(TestCase):
     """Ensure one-command setup is valid, private, and non-destructive by default."""
 
@@ -42,18 +56,17 @@ class SetupCommandTests(TestCase):
             dotenv_path = root / ".env"
             output = StringIO()
             with (
-                patch.object(setup, "DOTENV_PATH", dotenv_path),
+                _temporary_setup_dotenv(dotenv_path),
                 redirect_stdout(output),
             ):
                 status = setup.main(
                     (),
                     password_prompt=_password_prompt((password, password)),
                 )
-
-            document = dotenv_path.read_text(encoding="utf-8")
-            file_mode = stat.S_IMODE(dotenv_path.stat().st_mode)
-            with chdir(root), patch.dict(os.environ, {}, clear=True):
-                configured = config_security.load_config_security_settings()
+                document = dotenv_path.read_text(encoding="utf-8")
+                file_mode = stat.S_IMODE(dotenv_path.stat().st_mode)
+                with chdir(root), patch.dict(os.environ, {}, clear=True):
+                    configured = config_security.load_config_security_settings()
 
         self.assertEqual(status, 0)
         self.assertIsNotNone(configured)
@@ -144,7 +157,7 @@ class SetupCommandTests(TestCase):
             root = Path(temporary_directory)
             dotenv_path = root / ".env"
             with (
-                patch.object(setup, "DOTENV_PATH", dotenv_path),
+                _temporary_setup_dotenv(dotenv_path),
                 redirect_stdout(StringIO()),
             ):
                 status = setup.main(
@@ -155,10 +168,9 @@ class SetupCommandTests(TestCase):
                     ),
                     password_prompt=_password_prompt((password, password)),
                 )
-
-            document = dotenv_path.read_text(encoding="utf-8")
-            with chdir(root), patch.dict(os.environ, {}, clear=True):
-                configured = config_security.load_config_security_settings()
+                document = dotenv_path.read_text(encoding="utf-8")
+                with chdir(root), patch.dict(os.environ, {}, clear=True):
+                    configured = config_security.load_config_security_settings()
 
         self.assertEqual(status, 0)
         self.assertIsNotNone(configured)
