@@ -737,20 +737,36 @@ def _request_source_validation(
     request: Request,
     settings: ConfigSecuritySettings,
 ) -> RequestSourceValidation:
-    """Classify optional Origin or browser-controlled Fetch Metadata."""
+    """Classify Origin and optional browser-controlled Fetch Metadata."""
 
     origin = request.headers.get("origin")
-    if origin is not None and origin != "null":
-        try:
-            if hmac.compare_digest(
-                _normalise_origin(origin), settings.public_origin
-            ):
-                return RequestSourceValidation.TRUSTED
-        except ConfigSecurityConfigurationError:
-            pass
+    fetch_site = request.headers.get(FETCH_SITE_HEADER)
+    if origin is None:
+        return _fetch_site_validation(fetch_site)
+    if origin == "null":
+        fetch_validation = _fetch_site_validation(fetch_site)
+        return (
+            RequestSourceValidation.UNTRUSTED
+            if fetch_validation is RequestSourceValidation.MISSING
+            else fetch_validation
+        )
+    try:
+        if not hmac.compare_digest(
+            _normalise_origin(origin),
+            settings.public_origin,
+        ):
+            return RequestSourceValidation.UNTRUSTED
+    except ConfigSecurityConfigurationError:
         return RequestSourceValidation.UNTRUSTED
 
-    fetch_site = request.headers.get(FETCH_SITE_HEADER)
+    if fetch_site is None:
+        return RequestSourceValidation.TRUSTED
+    return _fetch_site_validation(fetch_site)
+
+
+def _fetch_site_validation(fetch_site: str | None) -> RequestSourceValidation:
+    """Classify optional Fetch Metadata while permitting an absent header."""
+
     if fetch_site is None:
         return RequestSourceValidation.MISSING
     if hmac.compare_digest(fetch_site.casefold(), SAME_ORIGIN_FETCH_SITE):

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
 umask 0027
 
@@ -20,13 +20,16 @@ if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
     exit 64
 fi
 
-function fetch_origin_commit_sha() {
-    git -C "$application_directory" fetch --no-tags origin \
-        "+refs/heads/$branch_name:refs/remotes/origin/$branch_name"
-    git -C "$application_directory" rev-parse "refs/remotes/origin/$branch_name"
+fetch_origin_commit_sha() {
+    if ! git -C "$application_directory" fetch --no-tags origin \
+        "+refs/heads/$branch_name:refs/remotes/origin/$branch_name"; then
+        return 1
+    fi
+    git -C "$application_directory" rev-parse --verify \
+        "refs/remotes/origin/$branch_name^{commit}"
 }
 
-function wait_for_healthy_application() {
+wait_for_healthy_application() {
     local attempt
 
     for ((attempt = 1; attempt <= health_attempts; attempt += 1)); do
@@ -38,25 +41,45 @@ function wait_for_healthy_application() {
     return 1
 }
 
-function sync_dependencies() {
+sync_dependencies() {
     env \
         HOME="/home/$deploy_user" \
         UV_PYTHON_INSTALL_DIR="$uv_python_install_directory" \
         "$uv_executable" sync --locked --no-dev --project "$application_directory"
 }
 
-function restart_application() {
+restart_application() {
     sudo -n /usr/bin/systemctl restart "$service_name"
 }
 
-function restore_previous_commit() {
+restore_previous_commit() {
     local previous_commit_sha="$1"
 
     echo "Restoring $previous_commit_sha." >&2
-    git -C "$application_directory" checkout --detach --force --quiet "$previous_commit_sha"
-    sync_dependencies
-    restart_application
+    if ! git -C "$application_directory" checkout --detach --force --quiet \
+        "$previous_commit_sha"; then
+        return 1
+    fi
+    if ! sync_dependencies; then
+        return 1
+    fi
+    if ! restart_application; then
+        return 1
+    fi
     wait_for_healthy_application
+}
+
+rollback_and_exit() {
+    local exit_status="$1"
+    local previous_commit_sha="$2"
+    local failure_message="$3"
+
+    if restore_previous_commit "$previous_commit_sha"; then
+        echo "$failure_message; rollback restored $previous_commit_sha." >&2
+        exit "$exit_status"
+    fi
+    echo "$failure_message; rollback failed." >&2
+    exit 1
 }
 
 if [[ ! -d "$application_directory/.git" ]]; then
@@ -67,7 +90,13 @@ if [[ ! -x "$uv_executable" ]]; then
     echo "Expected uv at $uv_executable." >&2
     exit 1
 fi
-if [[ -n "$(git -C "$application_directory" status --porcelain --untracked-files=all)" ]]; then
+if ! checkout_status="$(
+    git -C "$application_directory" status --porcelain --untracked-files=all
+)"; then
+    echo "Unable to inspect the checkout at $application_directory." >&2
+    exit 1
+fi
+if [[ -n "$checkout_status" ]]; then
     echo "Refusing to deploy a dirty checkout at $application_directory." >&2
     exit 1
 fi
@@ -78,46 +107,64 @@ if ! flock --nonblock 9; then
     exit 75
 fi
 
-origin_commit_sha="$(fetch_origin_commit_sha)"
+if ! origin_commit_sha="$(fetch_origin_commit_sha)"; then
+    echo "Unable to fetch origin/$branch_name." >&2
+    exit 1
+fi
 if [[ "$commit_sha" != "$origin_commit_sha" ]]; then
     echo "Skipping stale deployment for $commit_sha; origin/$branch_name is now $origin_commit_sha."
     exit 0
 fi
 
-previous_commit_sha="$(git -C "$application_directory" rev-parse --verify HEAD)"
-if [[ "$previous_commit_sha" == "$commit_sha" ]]; then
-    if wait_for_healthy_application; then
-        echo "APasz Hub is already serving $commit_sha."
-        exit 0
-    fi
-    restart_application
-    wait_for_healthy_application
-    echo "APasz Hub recovered $commit_sha."
-    exit 0
-fi
-
-git -C "$application_directory" checkout --detach --force --quiet "$commit_sha"
-if ! sync_dependencies; then
-    restore_previous_commit "$previous_commit_sha"
-    echo "Unable to synchronize dependencies for $commit_sha." >&2
+if ! previous_commit_sha="$(
+    git -C "$application_directory" rev-parse --verify "HEAD^{commit}"
+)"; then
+    echo "Unable to resolve the current deployed commit." >&2
     exit 1
 fi
-
-origin_commit_sha="$(fetch_origin_commit_sha)"
-if [[ "$commit_sha" != "$origin_commit_sha" ]]; then
-    restore_previous_commit "$previous_commit_sha"
-    echo "Not activating stale deployment $commit_sha; origin/$branch_name is now $origin_commit_sha."
-    exit 0
-fi
-
-if restart_application && wait_for_healthy_application; then
+if [[ "$previous_commit_sha" == "$commit_sha" ]]; then
+    # A matching checkout does not prove an interrupted prior run restarted it.
+    if ! sync_dependencies; then
+        echo "Unable to synchronize dependencies for $commit_sha." >&2
+        exit 1
+    fi
+    if ! restart_application; then
+        echo "Unable to restart APasz Hub for $commit_sha." >&2
+        exit 1
+    fi
+    if ! wait_for_healthy_application; then
+        echo "APasz Hub did not pass its health check for $commit_sha." >&2
+        exit 1
+    fi
     echo "APasz Hub is serving $commit_sha."
     exit 0
 fi
 
-if restore_previous_commit "$previous_commit_sha"; then
-    echo "APasz Hub did not pass its health check for $commit_sha; rollback restored $previous_commit_sha." >&2
-else
-    echo "APasz Hub did not pass its health check for $commit_sha and rollback failed." >&2
+if ! git -C "$application_directory" checkout --detach --force --quiet \
+    "$commit_sha"; then
+    rollback_and_exit 1 "$previous_commit_sha" \
+        "Unable to check out $commit_sha"
 fi
-exit 1
+if ! sync_dependencies; then
+    rollback_and_exit 1 "$previous_commit_sha" \
+        "Unable to synchronize dependencies for $commit_sha"
+fi
+
+if ! origin_commit_sha="$(fetch_origin_commit_sha)"; then
+    rollback_and_exit 1 "$previous_commit_sha" \
+        "Unable to verify origin/$branch_name after synchronizing dependencies for $commit_sha"
+fi
+if [[ "$commit_sha" != "$origin_commit_sha" ]]; then
+    rollback_and_exit 0 "$previous_commit_sha" \
+        "Not activating stale deployment $commit_sha; origin/$branch_name is now $origin_commit_sha"
+fi
+
+if ! restart_application; then
+    rollback_and_exit 1 "$previous_commit_sha" \
+        "Unable to restart APasz Hub for $commit_sha"
+fi
+if ! wait_for_healthy_application; then
+    rollback_and_exit 1 "$previous_commit_sha" \
+        "APasz Hub did not pass its health check for $commit_sha"
+fi
+echo "APasz Hub is serving $commit_sha."

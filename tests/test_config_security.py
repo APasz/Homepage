@@ -311,6 +311,8 @@ class ConfigSecurityTests(TestCase):
             httpx.Response,
             httpx.Response,
             httpx.Response,
+            httpx.Response,
+            httpx.Response,
         ]:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
@@ -351,11 +353,24 @@ class ConfigSecurityTests(TestCase):
                         ),
                     },
                 )
+                null_origin_without_fetch_metadata = await client.post(
+                    SiteRoute.CONFIG_LOGIN.value,
+                    data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
+                    headers={"Origin": "null"},
+                )
                 null_origin_cross_site_fetch = await client.post(
                     SiteRoute.CONFIG_LOGIN.value,
                     data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
                     headers={
                         "Origin": "null",
+                        config_security.FETCH_SITE_HEADER: "cross-site",
+                    },
+                )
+                matching_origin_cross_site_fetch = await client.post(
+                    SiteRoute.CONFIG_LOGIN.value,
+                    data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
+                    headers={
+                        "Origin": TEST_ORIGIN,
                         config_security.FETCH_SITE_HEADER: "cross-site",
                     },
                 )
@@ -375,7 +390,9 @@ class ConfigSecurityTests(TestCase):
                     wrong_origin,
                     same_origin_fetch,
                     null_origin_same_origin_fetch,
+                    null_origin_without_fetch_metadata,
                     null_origin_cross_site_fetch,
+                    matching_origin_cross_site_fetch,
                     invalid_password,
                     valid_login,
                 )
@@ -394,14 +411,16 @@ class ConfigSecurityTests(TestCase):
                 wrong_origin,
                 same_origin_fetch,
                 null_origin_same_origin_fetch,
+                null_origin_without_fetch_metadata,
                 null_origin_cross_site_fetch,
+                matching_origin_cross_site_fetch,
                 invalid_password,
                 valid_login,
             ) = asyncio.run(login_requests())
 
         self.assertEqual(len(logs.output), 1)
         self.assertIn("Configuration login failed", logs.output[0])
-        self.assertEqual(len(source_logs.output), 3)
+        self.assertEqual(len(source_logs.output), 5)
         self.assertEqual(missing_source_metadata.status_code, 303)
         self.assertEqual(
             missing_source_metadata.headers["location"], SiteRoute.CONFIG.value
@@ -416,7 +435,9 @@ class ConfigSecurityTests(TestCase):
         self.assertEqual(
             null_origin_same_origin_fetch.headers["location"], SiteRoute.CONFIG.value
         )
+        self.assertEqual(null_origin_without_fetch_metadata.status_code, 403)
         self.assertEqual(null_origin_cross_site_fetch.status_code, 403)
+        self.assertEqual(matching_origin_cross_site_fetch.status_code, 403)
         self.assertEqual(invalid_password.status_code, 303)
         self.assertEqual(
             invalid_password.headers["location"],

@@ -89,11 +89,11 @@ use the explicit local-only option. Never use it in production.
 uv run apasz-hub-setup --origin http://127.0.0.1:2036 --insecure-cookie
 ```
 
-Every authenticated configuration write verifies both a per-session CSRF token
-and the exact configured `Origin`. Login attempts are rate-limited after five
-failures in 15 minutes. Login outcomes and explicit configuration save, add,
-and delete actions are logged without logging passwords or submitted
-configuration data.
+Every authenticated configuration write verifies a per-session CSRF token and
+rejects explicit cross-origin request-source metadata. Login attempts are
+rate-limited after five failures in 15 minutes. Login outcomes and explicit
+configuration save, add, and delete actions are logged without logging
+passwords or submitted configuration data.
 
 ## Appearance
 
@@ -165,8 +165,8 @@ Configure HSTS at the TLS-terminating proxy or CDN
 
 After the `Verify` workflow succeeds for a commit on `main`, the production
 workflow deploys that exact commit over SSH. Deployments are serialized; stale
-commits are skipped, and a failed dependency sync or health check restores the
-previous checkout before reporting failure.
+commits are skipped, and any failure after checkout restores the previous
+release before reporting failure.
 
 The Eisei deployment uses `/opt/apasz-hub` for the checkout and virtual
 environment, and `/var/lib/apasz-hub` for persistent data and FastHTML's
