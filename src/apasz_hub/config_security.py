@@ -740,7 +740,7 @@ def _request_source_validation(
     """Classify optional Origin or browser-controlled Fetch Metadata."""
 
     origin = request.headers.get("origin")
-    if origin is not None:
+    if origin is not None and origin != "null":
         try:
             if hmac.compare_digest(
                 _normalise_origin(origin), settings.public_origin
