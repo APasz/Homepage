@@ -227,6 +227,35 @@ class ConfigSecurityTests(TestCase):
         assert session is not None
         self.assertNotIn(session.csrf_token, repr(session))
 
+    def test_rejected_source_metadata_is_bounded_for_logging(self) -> None:
+        async def invalid_login() -> httpx.Response:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url=TEST_ORIGIN,
+                follow_redirects=False,
+            ) as client:
+                return await client.post(
+                    SiteRoute.CONFIG_LOGIN.value,
+                    headers={
+                        "Origin": "x"
+                        * (config_security.MAX_LOGGED_SOURCE_METADATA_LENGTH + 1)
+                    },
+                )
+
+        access = _access()
+        with (
+            patch.object(config_security, "CONFIG_ACCESS", access),
+            self.assertLogs("apasz_hub.config_security", level="WARNING") as logs,
+        ):
+            response = asyncio.run(invalid_login())
+
+        expected_origin = "x" * (
+            config_security.MAX_LOGGED_SOURCE_METADATA_LENGTH - 1
+        ) + "…"
+        self.assertEqual(response.status_code, 403)
+        self.assertIn(f"origin={expected_origin!r}", logs.output[0])
+
     def test_unauthenticated_requests_cannot_reach_any_config_write_route(self) -> None:
         async def make_requests() -> tuple[
             httpx.Response,
@@ -333,6 +362,9 @@ class ConfigSecurityTests(TestCase):
         with (
             patch.object(config_security, "CONFIG_ACCESS", access),
             self.assertLogs("apasz_hub.routes.authentication", level="WARNING") as logs,
+            self.assertLogs(
+                "apasz_hub.config_security", level="WARNING"
+            ) as source_logs,
         ):
             (
                 missing_source_metadata,
@@ -345,6 +377,7 @@ class ConfigSecurityTests(TestCase):
 
         self.assertEqual(len(logs.output), 1)
         self.assertIn("Configuration login failed", logs.output[0])
+        self.assertEqual(len(source_logs.output), 2)
         self.assertEqual(missing_source_metadata.status_code, 303)
         self.assertEqual(
             missing_source_metadata.headers["location"], SiteRoute.CONFIG.value
@@ -441,6 +474,9 @@ class ConfigSecurityTests(TestCase):
             )
             with (
                 patch.object(config_security, "CONFIG_ACCESS", access),
+                self.assertLogs(
+                    "apasz_hub.config_security", level="WARNING"
+                ) as source_logs,
             ):
                 (
                     missing_token,
@@ -453,6 +489,7 @@ class ConfigSecurityTests(TestCase):
         self.assertEqual(missing_token.status_code, 403)
         self.assertEqual(invalid_token.status_code, 403)
         self.assertEqual(wrong_origin.status_code, 403)
+        self.assertEqual(len(source_logs.output), 1)
         self.assertEqual(missing_source_metadata.status_code, 303)
         self.assertEqual(valid.status_code, 303)
 

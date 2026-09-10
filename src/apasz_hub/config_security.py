@@ -54,6 +54,7 @@ LOGIN_FAILURE_LIMIT: Final = 5
 LOGIN_FAILURE_WINDOW_SECONDS: Final = 15 * 60
 LOGIN_TRACKED_CLIENT_LIMIT: Final = 2_048
 MAX_LOGIN_PASSWORD_LENGTH: Final = 1024
+MAX_LOGGED_SOURCE_METADATA_LENGTH: Final = 256
 SAFE_METHODS: Final = frozenset(("GET", "HEAD", "OPTIONS", "TRACE"))
 LOOPBACK_HOSTS: Final = frozenset(("127.0.0.1", "::1", "localhost"))
 LOGGER = getLogger(__name__)
@@ -374,6 +375,7 @@ class ConfigAccessMiddleware:
             _is_unsafe_method(method)
             and request_source is RequestSourceValidation.UNTRUSTED
         ):
+            _log_rejected_request_source(request)
             await _send_response(
                 PlainTextResponse("Invalid configuration request.", status_code=403),
                 scope,
@@ -754,6 +756,24 @@ def _request_source_validation(
     if hmac.compare_digest(fetch_site.casefold(), SAME_ORIGIN_FETCH_SITE):
         return RequestSourceValidation.TRUSTED
     return RequestSourceValidation.UNTRUSTED
+
+
+def _log_rejected_request_source(request: Request) -> None:
+    """Record bounded source metadata without exposing form data or cookies."""
+
+    LOGGER.warning(
+        "Rejected configuration request source metadata: origin=%r, sec_fetch_site=%r.",
+        _bounded_source_metadata(request.headers.get("origin")),
+        _bounded_source_metadata(request.headers.get(FETCH_SITE_HEADER)),
+    )
+
+
+def _bounded_source_metadata(value: str | None) -> str | None:
+    """Bound a client-controlled source field before including it in a log entry."""
+
+    if value is None or len(value) <= MAX_LOGGED_SOURCE_METADATA_LENGTH:
+        return value
+    return f"{value[:MAX_LOGGED_SOURCE_METADATA_LENGTH - 1]}…"
 
 
 def _set_request_session(scope: Scope, session: ConfigSession) -> None:
