@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from base64 import urlsafe_b64encode
 from collections.abc import Coroutine, Mapping
 from dataclasses import replace
@@ -50,7 +51,12 @@ from apasz_hub.data import (
     load_icon_assets,
     load_link_cards,
 )
-from apasz_hub.framework import FastHTMLApp, render
+from apasz_hub.framework import (
+    KEEPER_IGNORE_CLASS,
+    PASSWORD_MANAGER_IGNORE_ATTRIBUTES,
+    FastHTMLApp,
+    render,
+)
 from apasz_hub.github import (
     GithubRepositoryCountCache,
     GithubRepositoryCountUnavailable,
@@ -92,6 +98,10 @@ from tests.link_card_form_data import link_card_form_values
 
 CONFIG_TEST_ORIGIN = "https://testserver"
 CONFIG_TEST_PASSWORD = "correct horse battery staple"
+PASSWORD_MANAGER_IGNORE_MARKERS = tuple(
+    f'{attribute.replace("_", "-")}="{value}"'
+    for attribute, value in PASSWORD_MANAGER_IGNORE_ATTRIBUTES
+) + (KEEPER_IGNORE_CLASS,)
 CONFIG_TEST_ENVIRONMENT = {
     config_security.CONFIG_PASSWORD_HASH_ENV: config_security.CONFIG_PASSWORD_HASHER.hash(
         CONFIG_TEST_PASSWORD
@@ -423,6 +433,43 @@ class HomepageTests(TestCase):
 
         self.assertIn('action="/config/login"', document)
         self.assertNotIn('aria-current="page"', document)
+
+    def test_only_login_password_control_allows_password_managers(self) -> None:
+        """Exclude every configuration control except the login password."""
+
+        colors = load_theme_colors()
+        cards = load_link_cards()
+        icon_assets = load_icon_assets()
+        configuration_document = render(
+            configuration_page(
+                colors,
+                cards,
+                icon_assets,
+                csrf_token="test-csrf-token",
+            )
+        )
+        configuration_controls = re.findall(
+            r"<(?:input|select|textarea)\b[^>]*>",
+            configuration_document,
+        )
+
+        self.assertTrue(configuration_controls)
+        for marker in PASSWORD_MANAGER_IGNORE_MARKERS:
+            with self.subTest(marker=marker):
+                self.assertTrue(
+                    all(marker in control for control in configuration_controls)
+                )
+
+        login_controls = re.findall(
+            r"<input\b[^>]*>",
+            render(configuration_login_page()),
+        )
+
+        self.assertEqual(len(login_controls), 1)
+        self.assertIn('type="password"', login_controls[0])
+        for marker in PASSWORD_MANAGER_IGNORE_MARKERS:
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, login_controls[0])
 
     def test_icons_are_available_locally(self) -> None:
         icon_urls = [card.icon for card in load_link_cards()]

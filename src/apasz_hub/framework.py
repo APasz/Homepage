@@ -23,6 +23,14 @@ DEVELOPMENT_HOST: Final = settings.DEFAULT_HOST
 DEFAULT_PORT: Final = settings.DEFAULT_PORT
 DEFAULT_PRODUCTION_HOST: Final = DEVELOPMENT_HOST
 LOOPBACK_PROXY_IP: Final = "127.0.0.1"
+PASSWORD_MANAGER_IGNORE_ATTRIBUTES: Final[tuple[tuple[str, str], ...]] = (
+    ("data_1p_ignore", ""),
+    ("data_op_ignore", ""),
+    ("data_bwignore", "true"),
+    ("data_lpignore", "true"),
+    ("data_form_type", "other"),
+)
+KEEPER_IGNORE_CLASS: Final = "keeper-ignore"
 
 
 class HtmlNode:
@@ -188,6 +196,44 @@ def _component(value: object) -> Component:
     return cast(Component, value)
 
 
+def _password_manager_ignored_component(value: object) -> Component:
+    """Expose a form control excluded from supported password managers."""
+
+    component = _component(value)
+
+    def render_ignored_control(
+        *children: HtmlChild,
+        **attributes: str,
+    ) -> HtmlNode:
+        for attribute, attribute_value in PASSWORD_MANAGER_IGNORE_ATTRIBUTES:
+            attributes[attribute] = attribute_value
+        attributes["cls"] = _with_css_class(
+            attributes.get("cls"),
+            KEEPER_IGNORE_CLASS,
+        )
+        return component(*children, **attributes)
+
+    return render_ignored_control
+
+
+def _with_css_class(existing_class_names: str | None, css_class: str) -> str:
+    """Add one CSS class without duplicating it."""
+
+    if not existing_class_names:
+        return css_class
+    if css_class in existing_class_names.split():
+        return existing_class_names
+    return f"{existing_class_names} {css_class}"
+
+
+def password_input(**attributes: str) -> HtmlNode:
+    """Render a password input that remains available to password managers."""
+
+    if "type" in attributes:
+        raise ValueError("password_input sets type='password' automatically.")
+    return _component(fh.Input)(type="password", **attributes)
+
+
 A: Component = _component(fh.A)
 Article: Component = _component(fh.Article)
 Button: Component = _component(fh.Button)
@@ -200,7 +246,7 @@ H1: Component = _component(fh.H1)
 H2: Component = _component(fh.H2)
 Header: Component = _component(fh.Header)
 Img: Component = _component(fh.Img)
-Input: Component = _component(fh.Input)
+Input: Component = _password_manager_ignored_component(fh.Input)
 Label: Component = _component(fh.Label)
 Li: Component = _component(fh.Li)
 Link: Component = _component(fh.Link)
@@ -210,12 +256,12 @@ Nav: Component = _component(fh.Nav)
 Option: Component = _component(fh.Option)
 P: Component = _component(fh.P)
 Picture: Component = _component(fh.Picture)
-Select: Component = _component(fh.Select)
+Select: Component = _password_manager_ignored_component(fh.Select)
 Section: Component = _component(fh.Section)
 Script: Component = _component(fh.Script)
 Span: Component = _component(fh.Span)
 Source: Component = _component(fh.Source)
 Summary: Component = _component(fh.Summary)
-Textarea: Component = _component(fh.Textarea)
+Textarea: Component = _password_manager_ignored_component(fh.Textarea)
 Title: Component = _component(fh.Title)
 Ul: Component = _component(fh.Ul)

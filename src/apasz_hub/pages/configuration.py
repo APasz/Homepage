@@ -20,6 +20,7 @@ from apasz_hub.framework import (
     Section,
     Span,
     Textarea,
+    password_input,
 )
 from apasz_hub.open_graph import (
     OPEN_GRAPH_FIELD_DEFINITIONS,
@@ -85,8 +86,7 @@ def configuration_login_page(*, failed: bool = False) -> HtmlNode:
                 Section(
                     Label(
                         Span("Password", cls="link-card-control__label"),
-                        Input(
-                            type="password",
+                        password_input(
                             name=CONFIG_PASSWORD_FORM_NAME,
                             autocomplete="current-password",
                             maxlength="1024",
