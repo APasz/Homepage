@@ -13,6 +13,7 @@ class SiteRoute(StrEnum):
     """Named HTTP paths used by pages and route handlers."""
 
     HOME = "/"
+    ROBOTS = "/robots.txt"
     HEALTHZ = "/healthz"
     NOT_FOUND = "/404"
     INTERNAL_SERVER_ERROR = "/500"

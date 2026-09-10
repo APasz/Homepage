@@ -22,6 +22,15 @@ from apasz_hub.theme import (
     theme_stylesheet,
 )
 
+ROBOTS_CACHE_CONTROL = "public, max-age=3600, must-revalidate"
+ROBOTS_TEXT = """User-agent: *
+Allow: /
+Disallow: /config
+Disallow: /healthz
+Disallow: /404
+Disallow: /500
+"""
+
 
 def register_public_routes(
     app: FastHTMLApp,
@@ -61,6 +70,14 @@ def register_public_routes(
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
 
+    async def robots() -> PlainTextResponse:
+        """Tell cooperative crawlers which site endpoints are indexable."""
+
+        return PlainTextResponse(
+            ROBOTS_TEXT,
+            headers={"Cache-Control": ROBOTS_CACHE_CONTROL},
+        )
+
     async def not_found() -> PageResponse:
         """Render the public not-found page at its dedicated URL."""
 
@@ -80,6 +97,7 @@ def register_public_routes(
         )
 
     app.get(SiteRoute.HOME.value)(home)
+    app.get(SiteRoute.ROBOTS.value)(robots)
     app.get(SiteRoute.HEALTHZ.value)(healthz)
     app.get(SiteRoute.NOT_FOUND.value)(not_found)
     app.get(SiteRoute.INTERNAL_SERVER_ERROR.value)(internal_server_error)

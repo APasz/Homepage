@@ -75,6 +75,7 @@ from apasz_hub.pages import (
 )
 from apasz_hub.routes.configuration import LINK_CARD_DRAFT_REVISION_HEADER
 from apasz_hub.routes.paths import SiteRoute
+from apasz_hub.routes.public import ROBOTS_CACHE_CONTROL, ROBOTS_TEXT
 from apasz_hub.services import create_application_services
 from apasz_hub.theme import (
     DEFAULT_THEME_COLORS_PATH,
@@ -670,6 +671,18 @@ class HomepageTests(TestCase):
         self.assertEqual(response.text, "ok")
         self.assertTrue(response.headers["content-type"].startswith("text/plain"))
         self.assertEqual(response.headers["cache-control"], NO_STORE_CACHE_CONTROL)
+
+    def test_robots_file_allows_the_hub_and_excludes_non_public_routes(self) -> None:
+        (response,) = _run_test_coroutine(
+            _get_responses(_isolated_application(), SiteRoute.ROBOTS.value)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, ROBOTS_TEXT)
+        self.assertTrue(response.headers["content-type"].startswith("text/plain"))
+        self.assertEqual(response.headers["cache-control"], ROBOTS_CACHE_CONTROL)
+        for header, value in SECURITY_HEADERS:
+            self.assertEqual(response.headers[header], value)
 
     def test_not_found_response_uses_the_public_error_page(self) -> None:
         (response,) = _run_test_coroutine(
