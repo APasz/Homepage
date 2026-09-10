@@ -161,6 +161,33 @@ Unless a cache policy already exists, static `2xx` and
 Do not mark assets immutable until filenames are fingerprinted
 Configure HSTS at the TLS-terminating proxy or CDN
 
+### GitHub deployments
+
+After the `Verify` workflow succeeds for a commit on `main`, the production
+workflow deploys that exact commit over SSH. Deployments are serialized; stale
+commits are skipped, and a failed dependency sync or health check restores the
+previous checkout before reporting failure.
+
+The Eisei deployment uses `/opt/apasz-hub` for the checkout and virtual
+environment, and `/var/lib/apasz-hub` for persistent data and FastHTML's
+session key. Install `deploy/apasz-hub.service` and
+`deploy/apasz-hub-deploy.sudoers` with root ownership. The `apasz-deploy`
+account owns the checkout and may restart only `apasz-hub.service`; it cannot
+read the runtime data owned by the service account.
+
+Create a GitHub `production` environment and configure:
+
+| Name | Type | Value |
+| --- | --- | --- |
+| `APASZ_HUB_DEPLOY_HOST` | Variable | Eisei public host name or IP address |
+| `APASZ_HUB_DEPLOY_PORT` | Variable | SSH port; `22` when omitted |
+| `APASZ_HUB_DEPLOY_PRIVATE_KEY` | Secret | The complete private Ed25519 deployment key |
+| `APASZ_HUB_DEPLOY_KNOWN_HOSTS` | Secret | A verified, pinned `known_hosts` entry for Eisei |
+
+Lock the deployment account password and prefix its authorized key with
+`restrict`. Do not have the workflow fetch the server host key during a
+deployment.
+
 ## Assets
 
 ### SVG icons

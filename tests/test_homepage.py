@@ -680,7 +680,7 @@ class HomepageTests(TestCase):
         )
         self.assertEqual(config_login_response.status_code, 200)
         self.assertIn(
-            f"<title>Configuration login · {SITE.title}</title>",
+            f"<title>Login · {SITE.title}</title>",
             config_login_response.text,
         )
         self.assertIn(

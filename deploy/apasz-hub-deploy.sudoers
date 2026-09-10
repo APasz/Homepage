@@ -1,0 +1,2 @@
+# Allow the deployment account to restart only the APasz Hub service.
+apasz-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart apasz-hub.service

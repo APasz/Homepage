@@ -1,0 +1,56 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows: [Verify]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: apasz-hub-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment: production
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      APASZ_HUB_DEPLOY_HOST: ${{ vars.APASZ_HUB_DEPLOY_HOST }}
+      APASZ_HUB_DEPLOY_PORT: ${{ vars.APASZ_HUB_DEPLOY_PORT || '22' }}
+      APASZ_HUB_DEPLOY_PRIVATE_KEY: ${{ secrets.APASZ_HUB_DEPLOY_PRIVATE_KEY }}
+      APASZ_HUB_DEPLOY_KNOWN_HOSTS: ${{ secrets.APASZ_HUB_DEPLOY_KNOWN_HOSTS }}
+      APASZ_HUB_DEPLOY_USER: apasz-deploy
+      APASZ_HUB_COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${APASZ_HUB_DEPLOY_HOST:?Configure the APASZ_HUB_DEPLOY_HOST production variable.}"
+          : "${APASZ_HUB_DEPLOY_PRIVATE_KEY:?Configure the APASZ_HUB_DEPLOY_PRIVATE_KEY production secret.}"
+          : "${APASZ_HUB_DEPLOY_KNOWN_HOSTS:?Configure the APASZ_HUB_DEPLOY_KNOWN_HOSTS production secret.}"
+          install --directory --mode 0700 "$HOME/.ssh"
+          printf '%s\n' "$APASZ_HUB_DEPLOY_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$APASZ_HUB_DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Deploy the verified commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -p "$APASZ_HUB_DEPLOY_PORT" \
+            "$APASZ_HUB_DEPLOY_USER@$APASZ_HUB_DEPLOY_HOST" \
+            "bash /opt/apasz-hub/deploy/deploy-main '$APASZ_HUB_COMMIT_SHA'"

@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+umask 0027
+
+readonly application_directory='/opt/apasz-hub'
+readonly deployment_lock_file="$application_directory/.git/deploy.lock"
+readonly branch_name='main'
+readonly deploy_user='apasz-deploy'
+readonly health_endpoint='http://127.0.0.1:1996/healthz'
+readonly health_attempts=15
+readonly health_retry_delay_seconds=1
+readonly service_name='apasz-hub.service'
+readonly uv_executable='/usr/local/bin/uv'
+readonly uv_python_install_directory='/opt/uv/python'
+
+commit_sha="${1:-}"
+if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo 'A 40-character lowercase commit SHA is required.' >&2
+    exit 64
+fi
+
+function fetch_origin_commit_sha() {
+    git -C "$application_directory" fetch --no-tags origin \
+        "+refs/heads/$branch_name:refs/remotes/origin/$branch_name"
+    git -C "$application_directory" rev-parse "refs/remotes/origin/$branch_name"
+}
+
+function wait_for_healthy_application() {
+    local attempt
+
+    for ((attempt = 1; attempt <= health_attempts; attempt += 1)); do
+        if curl --fail --silent --show-error --max-time 3 "$health_endpoint" >/dev/null; then
+            return 0
+        fi
+        sleep "$health_retry_delay_seconds"
+    done
+    return 1
+}
+
+function sync_dependencies() {
+    env \
+        HOME="/home/$deploy_user" \
+        UV_PYTHON_INSTALL_DIR="$uv_python_install_directory" \
+        "$uv_executable" sync --locked --no-dev --project "$application_directory"
+}
+
+function restart_application() {
+    sudo -n /usr/bin/systemctl restart "$service_name"
+}
+
+function restore_previous_commit() {
+    local previous_commit_sha="$1"
+
+    echo "Restoring $previous_commit_sha." >&2
+    git -C "$application_directory" checkout --detach --force --quiet "$previous_commit_sha"
+    sync_dependencies
+    restart_application
+    wait_for_healthy_application
+}
+
+if [[ ! -d "$application_directory/.git" ]]; then
+    echo "Expected a Git checkout at $application_directory." >&2
+    exit 1
+fi
+if [[ ! -x "$uv_executable" ]]; then
+    echo "Expected uv at $uv_executable." >&2
+    exit 1
+fi
+if [[ -n "$(git -C "$application_directory" status --porcelain --untracked-files=all)" ]]; then
+    echo "Refusing to deploy a dirty checkout at $application_directory." >&2
+    exit 1
+fi
+
+exec 9>"$deployment_lock_file"
+if ! flock --nonblock 9; then
+    echo 'Another APasz Hub deployment is already running.' >&2
+    exit 75
+fi
+
+origin_commit_sha="$(fetch_origin_commit_sha)"
+if [[ "$commit_sha" != "$origin_commit_sha" ]]; then
+    echo "Skipping stale deployment for $commit_sha; origin/$branch_name is now $origin_commit_sha."
+    exit 0
+fi
+
+previous_commit_sha="$(git -C "$application_directory" rev-parse --verify HEAD)"
+if [[ "$previous_commit_sha" == "$commit_sha" ]]; then
+    if wait_for_healthy_application; then
+        echo "APasz Hub is already serving $commit_sha."
+        exit 0
+    fi
+    restart_application
+    wait_for_healthy_application
+    echo "APasz Hub recovered $commit_sha."
+    exit 0
+fi
+
+git -C "$application_directory" checkout --detach --force --quiet "$commit_sha"
+if ! sync_dependencies; then
+    restore_previous_commit "$previous_commit_sha"
+    echo "Unable to synchronize dependencies for $commit_sha." >&2
+    exit 1
+fi
+
+origin_commit_sha="$(fetch_origin_commit_sha)"
+if [[ "$commit_sha" != "$origin_commit_sha" ]]; then
+    restore_previous_commit "$previous_commit_sha"
+    echo "Not activating stale deployment $commit_sha; origin/$branch_name is now $origin_commit_sha."
+    exit 0
+fi
+
+if restart_application && wait_for_healthy_application; then
+    echo "APasz Hub is serving $commit_sha."
+    exit 0
+fi
+
+if restore_previous_commit "$previous_commit_sha"; then
+    echo "APasz Hub did not pass its health check for $commit_sha; rollback restored $previous_commit_sha." >&2
+else
+    echo "APasz Hub did not pass its health check for $commit_sha and rollback failed." >&2
+fi
+exit 1
