@@ -228,7 +228,11 @@ class ConfigSecurityTests(TestCase):
         self.assertNotIn(session.csrf_token, repr(session))
 
     def test_unauthenticated_requests_cannot_reach_any_config_write_route(self) -> None:
-        async def make_requests() -> tuple[httpx.Response, tuple[httpx.Response, ...]]:
+        async def make_requests() -> tuple[
+            httpx.Response,
+            tuple[httpx.Response, ...],
+            httpx.Response,
+        ]:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
                 transport=transport,
@@ -250,22 +254,27 @@ class ConfigSecurityTests(TestCase):
                     writes.append(
                         await client.post(path, headers={"Origin": TEST_ORIGIN})
                     )
-                return page, tuple(writes)
+                missing_source_metadata = await client.post(
+                    SiteRoute.CONFIG_COLOURS_SAVE.value
+                )
+                return page, tuple(writes), missing_source_metadata
 
         access = _access()
         with patch.object(config_security, "CONFIG_ACCESS", access):
-            page, writes = asyncio.run(make_requests())
+            page, writes, missing_source_metadata = asyncio.run(make_requests())
 
         self.assertEqual(page.status_code, 303)
         self.assertEqual(page.headers["location"], SiteRoute.CONFIG_LOGIN.value)
         for response in writes:
             self.assertEqual(response.status_code, 401)
             self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(missing_source_metadata.status_code, 401)
 
-    def test_login_requires_a_trusted_request_source_and_issues_a_secure_cookie(
+    def test_login_rejects_an_explicitly_untrusted_source_and_issues_a_secure_cookie(
         self,
     ) -> None:
         async def login_requests() -> tuple[
+            httpx.Response,
             httpx.Response,
             httpx.Response,
             httpx.Response,
@@ -278,7 +287,7 @@ class ConfigSecurityTests(TestCase):
                 base_url=TEST_ORIGIN,
                 follow_redirects=False,
             ) as client:
-                missing_origin = await client.post(
+                missing_source_metadata = await client.post(
                     SiteRoute.CONFIG_LOGIN.value,
                     data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
                 )
@@ -286,6 +295,11 @@ class ConfigSecurityTests(TestCase):
                     SiteRoute.CONFIG_LOGIN.value,
                     data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
                     headers={config_security.FETCH_SITE_HEADER: "cross-site"},
+                )
+                wrong_origin = await client.post(
+                    SiteRoute.CONFIG_LOGIN.value,
+                    data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
+                    headers={"Origin": "https://attacker.example"},
                 )
                 same_origin_fetch = await client.post(
                     SiteRoute.CONFIG_LOGIN.value,
@@ -307,8 +321,9 @@ class ConfigSecurityTests(TestCase):
                     headers={"Origin": TEST_ORIGIN},
                 )
                 return (
-                    missing_origin,
+                    missing_source_metadata,
                     cross_site_fetch,
+                    wrong_origin,
                     same_origin_fetch,
                     invalid_password,
                     valid_login,
@@ -320,8 +335,9 @@ class ConfigSecurityTests(TestCase):
             self.assertLogs("apasz_hub.routes.authentication", level="WARNING") as logs,
         ):
             (
-                missing_origin,
+                missing_source_metadata,
                 cross_site_fetch,
+                wrong_origin,
                 same_origin_fetch,
                 invalid_password,
                 valid_login,
@@ -329,8 +345,12 @@ class ConfigSecurityTests(TestCase):
 
         self.assertEqual(len(logs.output), 1)
         self.assertIn("Configuration login failed", logs.output[0])
-        self.assertEqual(missing_origin.status_code, 403)
+        self.assertEqual(missing_source_metadata.status_code, 303)
+        self.assertEqual(
+            missing_source_metadata.headers["location"], SiteRoute.CONFIG.value
+        )
         self.assertEqual(cross_site_fetch.status_code, 403)
+        self.assertEqual(wrong_origin.status_code, 403)
         self.assertEqual(same_origin_fetch.status_code, 303)
         self.assertEqual(
             same_origin_fetch.headers["location"], SiteRoute.CONFIG.value
@@ -350,7 +370,7 @@ class ConfigSecurityTests(TestCase):
         self.assertIn("SameSite=strict", cookie)
         self.assertIn("Secure", cookie)
 
-    def test_authenticated_writes_require_a_trusted_source_and_csrf_token(
+    def test_authenticated_writes_require_csrf_and_reject_untrusted_sources(
         self,
     ) -> None:
         async def make_requests(
@@ -391,15 +411,9 @@ class ConfigSecurityTests(TestCase):
                         ),
                     },
                 )
-                same_origin_fetch = await client.post(
+                missing_source_metadata = await client.post(
                     SiteRoute.CONFIG_COLOURS_SAVE.value,
                     data=_csrf_form(token),
-                    headers={
-                        config_security.FETCH_SITE_HEADER: (
-                            config_security.SAME_ORIGIN_FETCH_SITE
-                        ),
-                        config_security.CONFIG_CSRF_HEADER: token,
-                    },
                 )
                 valid = await client.post(
                     SiteRoute.CONFIG_COLOURS_SAVE.value,
@@ -410,7 +424,7 @@ class ConfigSecurityTests(TestCase):
                     missing_token,
                     invalid_token,
                     wrong_origin,
-                    same_origin_fetch,
+                    missing_source_metadata,
                     valid,
                 )
 
@@ -432,14 +446,14 @@ class ConfigSecurityTests(TestCase):
                     missing_token,
                     invalid_token,
                     wrong_origin,
-                    same_origin_fetch,
+                    missing_source_metadata,
                     valid,
                 ) = asyncio.run(make_requests(test_app))
 
         self.assertEqual(missing_token.status_code, 403)
         self.assertEqual(invalid_token.status_code, 403)
         self.assertEqual(wrong_origin.status_code, 403)
-        self.assertEqual(same_origin_fetch.status_code, 303)
+        self.assertEqual(missing_source_metadata.status_code, 303)
         self.assertEqual(valid.status_code, 303)
 
     def test_logout_invalidates_the_server_side_session(self) -> None:

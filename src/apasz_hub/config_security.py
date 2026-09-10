@@ -79,6 +79,14 @@ class LoginResult(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class RequestSourceValidation(StrEnum):
+    """The trust level of optional browser request-source metadata."""
+
+    MISSING = "missing"
+    TRUSTED = "trusted"
+    UNTRUSTED = "untrusted"
+
+
 @dataclass(frozen=True, slots=True)
 class ConfigSecuritySettings:
     """Validated secret and deployment settings for configuration access."""
@@ -361,8 +369,10 @@ class ConfigAccessMiddleware:
         if session is not None:
             _set_request_session(scope, session)
 
-        if _is_unsafe_method(method) and not _has_trusted_request_source(
-            request, settings
+        request_source = _request_source_validation(request, settings)
+        if (
+            _is_unsafe_method(method)
+            and request_source is RequestSourceValidation.UNTRUSTED
         ):
             await _send_response(
                 PlainTextResponse("Invalid configuration request.", status_code=403),
@@ -721,20 +731,29 @@ def _is_unsafe_method(method: str) -> bool:
     return method.upper() not in SAFE_METHODS
 
 
-def _has_trusted_request_source(
+def _request_source_validation(
     request: Request,
     settings: ConfigSecuritySettings,
-) -> bool:
-    """Validate Origin or browser-controlled same-origin Fetch Metadata."""
+) -> RequestSourceValidation:
+    """Classify optional Origin or browser-controlled Fetch Metadata."""
 
     origin = request.headers.get("origin")
-    if origin is None:
-        fetch_site = request.headers.get(FETCH_SITE_HEADER, "").casefold()
-        return hmac.compare_digest(fetch_site, SAME_ORIGIN_FETCH_SITE)
-    try:
-        return hmac.compare_digest(_normalise_origin(origin), settings.public_origin)
-    except ConfigSecurityConfigurationError:
-        return False
+    if origin is not None:
+        try:
+            if hmac.compare_digest(
+                _normalise_origin(origin), settings.public_origin
+            ):
+                return RequestSourceValidation.TRUSTED
+        except ConfigSecurityConfigurationError:
+            pass
+        return RequestSourceValidation.UNTRUSTED
+
+    fetch_site = request.headers.get(FETCH_SITE_HEADER)
+    if fetch_site is None:
+        return RequestSourceValidation.MISSING
+    if hmac.compare_digest(fetch_site.casefold(), SAME_ORIGIN_FETCH_SITE):
+        return RequestSourceValidation.TRUSTED
+    return RequestSourceValidation.UNTRUSTED
 
 
 def _set_request_session(scope: Scope, session: ConfigSession) -> None:
