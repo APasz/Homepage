@@ -40,6 +40,8 @@ CONFIG_COOKIE_SECURE_ENV: Final = settings.CONFIG_COOKIE_SECURE_ENV
 CONFIG_PASSWORD_FORM_NAME: Final = "password"
 CONFIG_CSRF_FORM_NAME: Final = "config-csrf-token"
 CONFIG_CSRF_HEADER: Final = "X-CSRF-Token"
+FETCH_SITE_HEADER: Final = "Sec-Fetch-Site"
+SAME_ORIGIN_FETCH_SITE: Final = "same-origin"
 CONFIG_SESSION_STATE_KEY: Final = "apasz_hub.config_session"
 CONFIG_SESSION_COOKIE_NAME: Final = "__Host-apasz-config-session"
 INSECURE_CONFIG_SESSION_COOKIE_NAME: Final = "apasz-config-session"
@@ -359,7 +361,9 @@ class ConfigAccessMiddleware:
         if session is not None:
             _set_request_session(scope, session)
 
-        if _is_unsafe_method(method) and not _has_expected_origin(request, settings):
+        if _is_unsafe_method(method) and not _has_trusted_request_source(
+            request, settings
+        ):
             await _send_response(
                 PlainTextResponse("Invalid configuration request.", status_code=403),
                 scope,
@@ -717,12 +721,16 @@ def _is_unsafe_method(method: str) -> bool:
     return method.upper() not in SAFE_METHODS
 
 
-def _has_expected_origin(request: Request, settings: ConfigSecuritySettings) -> bool:
-    """Require an exact configured source origin for unsafe browser requests."""
+def _has_trusted_request_source(
+    request: Request,
+    settings: ConfigSecuritySettings,
+) -> bool:
+    """Validate Origin or browser-controlled same-origin Fetch Metadata."""
 
     origin = request.headers.get("origin")
     if origin is None:
-        return False
+        fetch_site = request.headers.get(FETCH_SITE_HEADER, "").casefold()
+        return hmac.compare_digest(fetch_site, SAME_ORIGIN_FETCH_SITE)
     try:
         return hmac.compare_digest(_normalise_origin(origin), settings.public_origin)
     except ConfigSecurityConfigurationError:

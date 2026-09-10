@@ -262,9 +262,15 @@ class ConfigSecurityTests(TestCase):
             self.assertEqual(response.status_code, 401)
             self.assertEqual(response.headers["cache-control"], "no-store")
 
-    def test_login_requires_same_origin_and_issues_a_secure_cookie(self) -> None:
+    def test_login_requires_a_trusted_request_source_and_issues_a_secure_cookie(
+        self,
+    ) -> None:
         async def login_requests() -> tuple[
-            httpx.Response, httpx.Response, httpx.Response
+            httpx.Response,
+            httpx.Response,
+            httpx.Response,
+            httpx.Response,
+            httpx.Response,
         ]:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
@@ -276,6 +282,20 @@ class ConfigSecurityTests(TestCase):
                     SiteRoute.CONFIG_LOGIN.value,
                     data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
                 )
+                cross_site_fetch = await client.post(
+                    SiteRoute.CONFIG_LOGIN.value,
+                    data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
+                    headers={config_security.FETCH_SITE_HEADER: "cross-site"},
+                )
+                same_origin_fetch = await client.post(
+                    SiteRoute.CONFIG_LOGIN.value,
+                    data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
+                    headers={
+                        config_security.FETCH_SITE_HEADER: (
+                            config_security.SAME_ORIGIN_FETCH_SITE
+                        )
+                    },
+                )
                 invalid_password = await client.post(
                     SiteRoute.CONFIG_LOGIN.value,
                     data={config_security.CONFIG_PASSWORD_FORM_NAME: "incorrect"},
@@ -286,20 +306,35 @@ class ConfigSecurityTests(TestCase):
                     data={config_security.CONFIG_PASSWORD_FORM_NAME: TEST_PASSWORD},
                     headers={"Origin": TEST_ORIGIN},
                 )
-                return missing_origin, invalid_password, valid_login
+                return (
+                    missing_origin,
+                    cross_site_fetch,
+                    same_origin_fetch,
+                    invalid_password,
+                    valid_login,
+                )
 
         access = _access()
         with (
             patch.object(config_security, "CONFIG_ACCESS", access),
             self.assertLogs("apasz_hub.routes.authentication", level="WARNING") as logs,
         ):
-            missing_origin, invalid_password, valid_login = asyncio.run(
-                login_requests()
-            )
+            (
+                missing_origin,
+                cross_site_fetch,
+                same_origin_fetch,
+                invalid_password,
+                valid_login,
+            ) = asyncio.run(login_requests())
 
         self.assertEqual(len(logs.output), 1)
         self.assertIn("Configuration login failed", logs.output[0])
         self.assertEqual(missing_origin.status_code, 403)
+        self.assertEqual(cross_site_fetch.status_code, 403)
+        self.assertEqual(same_origin_fetch.status_code, 303)
+        self.assertEqual(
+            same_origin_fetch.headers["location"], SiteRoute.CONFIG.value
+        )
         self.assertEqual(invalid_password.status_code, 303)
         self.assertEqual(
             invalid_password.headers["location"],
@@ -315,10 +350,13 @@ class ConfigSecurityTests(TestCase):
         self.assertIn("SameSite=strict", cookie)
         self.assertIn("Secure", cookie)
 
-    def test_authenticated_writes_require_matching_origin_and_csrf_token(self) -> None:
+    def test_authenticated_writes_require_a_trusted_source_and_csrf_token(
+        self,
+    ) -> None:
         async def make_requests(
             test_app: FastHTMLApp,
         ) -> tuple[
+            httpx.Response,
             httpx.Response,
             httpx.Response,
             httpx.Response,
@@ -346,14 +384,35 @@ class ConfigSecurityTests(TestCase):
                 wrong_origin = await client.post(
                     SiteRoute.CONFIG_COLOURS_SAVE.value,
                     data=_csrf_form(token),
-                    headers=_csrf_headers(token, origin="https://attacker.example"),
+                    headers={
+                        **_csrf_headers(token, origin="https://attacker.example"),
+                        config_security.FETCH_SITE_HEADER: (
+                            config_security.SAME_ORIGIN_FETCH_SITE
+                        ),
+                    },
+                )
+                same_origin_fetch = await client.post(
+                    SiteRoute.CONFIG_COLOURS_SAVE.value,
+                    data=_csrf_form(token),
+                    headers={
+                        config_security.FETCH_SITE_HEADER: (
+                            config_security.SAME_ORIGIN_FETCH_SITE
+                        ),
+                        config_security.CONFIG_CSRF_HEADER: token,
+                    },
                 )
                 valid = await client.post(
                     SiteRoute.CONFIG_COLOURS_SAVE.value,
                     data=_csrf_form(token),
                     headers=_csrf_headers(token),
                 )
-                return missing_token, invalid_token, wrong_origin, valid
+                return (
+                    missing_token,
+                    invalid_token,
+                    wrong_origin,
+                    same_origin_fetch,
+                    valid,
+                )
 
         with TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "theme_colors.json"
@@ -369,13 +428,18 @@ class ConfigSecurityTests(TestCase):
             with (
                 patch.object(config_security, "CONFIG_ACCESS", access),
             ):
-                missing_token, invalid_token, wrong_origin, valid = asyncio.run(
-                    make_requests(test_app)
-                )
+                (
+                    missing_token,
+                    invalid_token,
+                    wrong_origin,
+                    same_origin_fetch,
+                    valid,
+                ) = asyncio.run(make_requests(test_app))
 
         self.assertEqual(missing_token.status_code, 403)
         self.assertEqual(invalid_token.status_code, 403)
         self.assertEqual(wrong_origin.status_code, 403)
+        self.assertEqual(same_origin_fetch.status_code, 303)
         self.assertEqual(valid.status_code, 303)
 
     def test_logout_invalidates_the_server_side_session(self) -> None:
