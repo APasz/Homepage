@@ -60,10 +60,14 @@ def document_metadata(
     metadata: SiteMetadata,
     *,
     include_title: bool = True,
+    document_title: str | None = None,
 ) -> tuple[HtmlNode, ...]:
-    """Build request-fresh title and social metadata for one rendered page."""
+    """Build request-fresh document and social metadata for one rendered page."""
 
-    title = (Title(metadata.title),) if include_title else ()
+    if not include_title and document_title is not None:
+        raise ValueError("A document title cannot be set when title output is disabled.")
+    title_value = metadata.title if document_title is None else document_title
+    title = (Title(title_value),) if include_title else ()
     image_metadata: tuple[HtmlNode, ...] = ()
     if metadata.image_url is not None:
         image_metadata = (

@@ -26,10 +26,10 @@ uv run python -m unittest discover -s tests -v
 
 Link cards are loaded and validated once when the server starts. After enabling
 configuration access, visit `/config` to edit its in-memory draft. **Add Link**
-appends a default card, and **Delete** appears on expanded cards; neither change
-is live until **Save Links** atomically writes the draft to
-`src/apasz_hub/link_cards.json` and publishes it to the homepage. External JSON
-changes require a server restart to be picked up.
+appends a default card; expanded cards provide **Move up**, **Move down**, and
+**Delete** actions. These changes are not live until **Save Links** atomically
+writes the draft to `src/apasz_hub/link_cards.json` and publishes it to the
+homepage. External JSON changes require a server restart to be picked up.
 
 Each card requires `title`, `href`, `tier`, and `icon`
 `tier` is `featured`, `standard`, or `utility`

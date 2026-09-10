@@ -25,4 +25,6 @@ class SiteRoute(StrEnum):
     CONFIG_LINK_CARDS_DRAFT = f"{CONFIG_PATH}/link-cards/draft"
     CONFIG_LINK_CARDS_ADD = f"{CONFIG_PATH}/link-cards/add"
     CONFIG_LINK_CARDS_DELETE = f"{CONFIG_PATH}/link-cards/delete"
+    CONFIG_LINK_CARDS_MOVE_UP = f"{CONFIG_PATH}/link-cards/move-up"
+    CONFIG_LINK_CARDS_MOVE_DOWN = f"{CONFIG_PATH}/link-cards/move-down"
     CONFIG_LINK_CARDS_SAVE = f"{CONFIG_PATH}/link-cards"

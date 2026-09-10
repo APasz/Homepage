@@ -35,6 +35,7 @@ from apasz_hub.data import (
     LINK_CARD_COLOUR_CONTROL_PAIRS,
     LINK_CARD_COLOUR_CONTROLS,
     LINK_CARD_DELETE_INDEX_FORM_NAME,
+    LINK_CARD_MOVE_INDEX_FORM_NAME,
     PROFILE_IMAGE_URL,
     PROFILE_REDUCED_MOTION_IMAGE_URL,
     SITE,
@@ -100,6 +101,15 @@ CONFIG_TEST_ENVIRONMENT = {
     .rstrip("="),
     config_security.PUBLIC_ORIGIN_ENV: CONFIG_TEST_ORIGIN,
 }
+
+type _ApplicationResponses = tuple[
+    httpx.Response,
+    httpx.Response,
+    httpx.Response,
+    httpx.Response,
+    httpx.Response,
+    httpx.Response,
+]
 
 
 def _config_access() -> config_security.ConfigAccess:
@@ -177,9 +187,7 @@ def _isolated_application(
 
 async def _application_responses(
     access: config_security.ConfigAccess,
-) -> tuple[
-    httpx.Response, httpx.Response, httpx.Response, httpx.Response, httpx.Response
-]:
+) -> _ApplicationResponses:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url=CONFIG_TEST_ORIGIN
@@ -190,6 +198,7 @@ async def _application_responses(
             SITE_STYLESHEET_URL,
             headers={"If-None-Match": stylesheet_response.headers["etag"]},
         )
+        config_login_response = await client.get(SiteRoute.CONFIG_LOGIN.value)
         await _authenticate_config_client(client, access)
         config_response = await client.get("/config")
         theme_response = await client.get(THEME_STYLESHEET_URL)
@@ -197,14 +206,13 @@ async def _application_responses(
             page_response,
             stylesheet_response,
             cached_stylesheet_response,
+            config_login_response,
             config_response,
             theme_response,
         )
 
 
-def _run_application_responses() -> tuple[
-    httpx.Response, httpx.Response, httpx.Response, httpx.Response, httpx.Response
-]:
+def _run_application_responses() -> _ApplicationResponses:
     """Exercise file responses on Uvicorn's available event loop."""
 
     access = _config_access()
@@ -285,10 +293,31 @@ class HomepageTests(TestCase):
         self.assertIn('action="/config/link-cards"', document)
         self.assertIn('formaction="/config/link-cards/add"', document)
         self.assertIn('formaction="/config/link-cards/delete"', document)
+        self.assertIn('formaction="/config/link-cards/move-up"', document)
+        self.assertIn('formaction="/config/link-cards/move-down"', document)
         self.assertIn("Add Link", document)
         self.assertIn("Save Links", document)
         self.assertEqual(document.count('data-link-card-delete=""'), len(cards))
+        self.assertEqual(document.count('data-link-card-move="up"'), len(cards))
+        self.assertEqual(document.count('data-link-card-move="down"'), len(cards))
         self.assertEqual(document.count('formnovalidate=""'), len(cards))
+        self.assertEqual(
+            document.count('link-card-manager__indicator'),
+            len(cards),
+        )
+        for summary in document.split("<summary")[1:]:
+            self.assertNotIn(
+                'data-link-card-delete=""',
+                summary.split("</summary>", maxsplit=1)[0],
+            )
+        self.assertRegex(
+            document,
+            r'<button(?=[^>]*data-link-card-move="up")(?=[^>]*disabled)[^>]*>Move up</button>',
+        )
+        self.assertRegex(
+            document,
+            r'<button(?=[^>]*data-link-card-move="down")(?=[^>]*disabled)[^>]*>Move down</button>',
+        )
         for card in cards:
             self.assertIn(card.title, document)
         for index, card in enumerate(cards):
@@ -587,12 +616,15 @@ class HomepageTests(TestCase):
         self.assertIn("function configureLinkCardControls", script)
         self.assertIn("function configureColourControls", script)
         self.assertIn("function updateAutomaticLinkCardColours", script)
+        self.assertIn("function updateCardTitleReferences", script)
         self.assertIn("Draft updated. Save Links to publish.", script)
-        self.assertIn("data-link-card-delete", script)
+        self.assertIn("submitter.dataset.linkCardDelete", script)
+        self.assertIn("submitter.dataset.linkCardMove", script)
         self.assertIn(
-            ".link-card-manager__card[open] .link-card-manager__delete",
+            ".link-card-manager__card[open] .link-card-manager__card-actions",
             stylesheet,
         )
+        self.assertIn(".link-card-manager__indicator::after", stylesheet)
         self.assertTrue((STATIC_DIRECTORY / "media" / "pfp-anim.webp").is_file())
         self.assertTrue(
             (STATIC_DIRECTORY / WORDMARK_URL.removeprefix("/static/")).is_file()
@@ -607,6 +639,7 @@ class HomepageTests(TestCase):
             page_response,
             stylesheet_response,
             cached_stylesheet_response,
+            config_login_response,
             config_response,
             theme_response,
         ) = _run_application_responses()
@@ -644,10 +677,27 @@ class HomepageTests(TestCase):
             cached_stylesheet_response.headers["cache-control"],
             STATIC_CACHE_CONTROL,
         )
+        self.assertEqual(config_login_response.status_code, 200)
+        self.assertIn(
+            f"<title>Configuration login · {SITE.title}</title>",
+            config_login_response.text,
+        )
+        self.assertIn(
+            f'<meta property="og:title" content="{SITE.title}">',
+            config_login_response.text,
+        )
         self.assertEqual(config_response.status_code, 200)
         self.assertEqual(
             config_response.headers["cache-control"],
             NO_STORE_CACHE_CONTROL,
+        )
+        self.assertIn(
+            f"<title>Configuration · {SITE.title}</title>",
+            config_response.text,
+        )
+        self.assertIn(
+            f'<meta property="og:title" content="{SITE.title}">',
+            config_response.text,
         )
         self.assertIn('data-theme-controls=""', config_response.text)
         self.assertIn('data-link-card-controls=""', config_response.text)
@@ -1187,6 +1237,93 @@ class HomepageTests(TestCase):
         self.assertEqual(draft_document, original_document)
         self.assertIn(updated_title, config_response.text)
         self.assertNotIn(original_cards[1].title, config_response.text)
+        self.assertIn("Draft changes", config_response.text)
+
+    def test_move_link_card_reorders_an_unpublished_draft_entry(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            original_document = DEFAULT_LINK_CARDS_PATH.read_text(encoding="utf-8")
+            path.write_text(original_document, encoding="utf-8")
+            store = LinkCardStore(path)
+            store.load()
+            original_cards = store.draft_cards()
+            values = link_card_form_values(original_cards)
+            updated_title = "Updated first link"
+            values[link_card_form_name(0, LinkCardFormField.TITLE)] = updated_title
+            values[LINK_CARD_MOVE_INDEX_FORM_NAME] = "0"
+
+            async def move_link_cards(
+                test_app: FastHTMLApp,
+                access: config_security.ConfigAccess,
+            ) -> tuple[
+                httpx.Response,
+                httpx.Response,
+                httpx.Response,
+                tuple[str, ...],
+            ]:
+                transport = httpx.ASGITransport(app=test_app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url=CONFIG_TEST_ORIGIN,
+                ) as client:
+                    csrf_token = await _authenticate_config_client(client, access)
+                    move_response = await client.post(
+                        SiteRoute.CONFIG_LINK_CARDS_MOVE_DOWN.value,
+                        data=_csrf_form_values(values, csrf_token),
+                        headers=_config_headers(csrf_token),
+                        follow_redirects=False,
+                    )
+                    moved_titles = tuple(
+                        card.title for card in store.draft_cards()
+                    )
+                    move_up_values = link_card_form_values(store.draft_cards())
+                    move_up_values[LINK_CARD_MOVE_INDEX_FORM_NAME] = "1"
+                    move_up_response = await client.post(
+                        SiteRoute.CONFIG_LINK_CARDS_MOVE_UP.value,
+                        data=_csrf_form_values(move_up_values, csrf_token),
+                        headers=_config_headers(csrf_token),
+                        follow_redirects=False,
+                    )
+                    config_response = await client.get(
+                        move_up_response.headers["location"]
+                    )
+                    return (
+                        move_response,
+                        move_up_response,
+                        config_response,
+                        moved_titles,
+                    )
+
+            access = _config_access()
+            test_app = _isolated_application(link_cards=store)
+            with patch.object(config_security, "CONFIG_ACCESS", access):
+                (
+                    move_response,
+                    move_up_response,
+                    config_response,
+                    moved_titles,
+                ) = asyncio.run(
+                    move_link_cards(test_app, access),
+                )
+            draft_document = path.read_text(encoding="utf-8")
+
+        self.assertEqual(move_response.status_code, 303)
+        self.assertEqual(move_response.headers["location"], SiteRoute.CONFIG.value)
+        self.assertEqual(
+            moved_titles,
+            (original_cards[1].title, updated_title, *(card.title for card in original_cards[2:])),
+        )
+        self.assertEqual(move_up_response.status_code, 303)
+        self.assertEqual(move_up_response.headers["location"], SiteRoute.CONFIG.value)
+        self.assertEqual(store.draft_cards()[0].title, updated_title)
+        self.assertEqual(store.draft_cards()[1], original_cards[1])
+        self.assertEqual(store.draft_cards()[2:], original_cards[2:])
+        self.assertEqual(store.published_cards(), original_cards)
+        self.assertEqual(draft_document, original_document)
+        self.assertLess(
+            config_response.text.index(updated_title),
+            config_response.text.index(original_cards[1].title),
+        )
         self.assertIn("Draft changes", config_response.text)
 
     def test_link_card_draft_rejects_invalid_submission_without_mutating_state(

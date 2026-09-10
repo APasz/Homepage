@@ -37,6 +37,13 @@ class CardKind(StrEnum):
     GITHUB = "github"
 
 
+class LinkCardMoveDirection(StrEnum):
+    """Adjacent directions available when reordering LinkCard drafts."""
+
+    UP = "up"
+    DOWN = "down"
+
+
 DEFAULT_ICON_SCALE: Final = 100
 
 
@@ -110,6 +117,7 @@ class LinkCardFormField(StrEnum):
 
 
 LINK_CARD_DELETE_INDEX_FORM_NAME: Final = "link-card-delete-index"
+LINK_CARD_MOVE_INDEX_FORM_NAME: Final = "link-card-move-index"
 
 
 @dataclass(frozen=True, slots=True)
@@ -543,6 +551,33 @@ def _validate_link_card_draft_index(
         raise LinkCardDataError(f"Link-card draft index {index} is out of range.")
 
 
+def _move_link_card_draft(
+    cards: tuple[LinkCard, ...],
+    index: int,
+    direction: LinkCardMoveDirection,
+) -> tuple[LinkCard, ...]:
+    """Return a draft with one card swapped with its adjacent neighbor."""
+
+    _validate_link_card_draft_index(index, cards)
+    if direction is LinkCardMoveDirection.UP:
+        destination_index = index - 1
+    elif direction is LinkCardMoveDirection.DOWN:
+        destination_index = index + 1
+    else:
+        raise LinkCardDataError("Link-card move direction is invalid.")
+    if destination_index < 0 or destination_index >= len(cards):
+        raise LinkCardDataError(
+            f"Link-card draft index {index} cannot move {direction.value}."
+        )
+
+    reordered_cards = list(cards)
+    reordered_cards[index], reordered_cards[destination_index] = (
+        reordered_cards[destination_index],
+        reordered_cards[index],
+    )
+    return tuple(reordered_cards)
+
+
 class LinkCardStore:
     """Keep separate published and editable LinkCard snapshots in one process."""
 
@@ -649,6 +684,30 @@ class LinkCardStore:
             source_cards,
             excluded_index=index,
         )
+        return self._replace_draft_if_changed(source_cards, cards)
+
+    def move_draft_card(
+        self,
+        index: int,
+        direction: LinkCardMoveDirection,
+    ) -> tuple[LinkCard, ...]:
+        """Move one draft card by one position without publishing it."""
+
+        source_cards = self.draft_cards()
+        cards = _move_link_card_draft(source_cards, index, direction)
+        return self._replace_draft_if_changed(source_cards, cards)
+
+    def move_draft_card_from_form(
+        self,
+        values: Mapping[str, object],
+        index: int,
+        direction: LinkCardMoveDirection,
+    ) -> tuple[LinkCard, ...]:
+        """Apply valid edits while atomically moving one draft card by one position."""
+
+        source_cards = self.draft_cards()
+        draft_cards = link_card_draft_from_form(values, source_cards)
+        cards = _move_link_card_draft(draft_cards, index, direction)
         return self._replace_draft_if_changed(source_cards, cards)
 
     def save_draft(self) -> tuple[LinkCard, ...]:

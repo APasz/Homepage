@@ -14,8 +14,10 @@ from apasz_hub import config_security
 from apasz_hub.components import document_metadata, theme_color_meta
 from apasz_hub.data import (
     LINK_CARD_DELETE_INDEX_FORM_NAME,
+    LINK_CARD_MOVE_INDEX_FORM_NAME,
     LinkCardDataError,
     LinkCardDraftConflictError,
+    LinkCardMoveDirection,
     load_icon_assets,
 )
 from apasz_hub.framework import FastHTMLApp, RouteResponse, response_header
@@ -48,7 +50,10 @@ def register_configuration_routes(
         colors = services.theme_colors.published_colors()
         link_cards = services.link_cards
         return (
-            *document_metadata(metadata),
+            *document_metadata(
+                metadata,
+                document_title=f"Configuration · {metadata.title}",
+            ),
             theme_color_meta(colors),
             configuration_page(
                 colors,
@@ -127,13 +132,54 @@ def register_configuration_routes(
 
         form_values = await _configuration_form_values(request)
         try:
-            index = _link_card_delete_index(form_values)
+            index = _link_card_action_index(
+                form_values,
+                form_name=LINK_CARD_DELETE_INDEX_FORM_NAME,
+                action="delete",
+            )
             form_values.pop(LINK_CARD_DELETE_INDEX_FORM_NAME)
             services.link_cards.delete_draft_card_from_form(form_values, index)
         except LinkCardDataError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         _log_configuration_change(request, "deleted a link-card draft entry")
         return RedirectResponse(SiteRoute.CONFIG.value, status_code=303)
+
+    async def move_link_card(
+        request: Request,
+        direction: LinkCardMoveDirection,
+    ) -> RedirectResponse:
+        """Apply current edits and move one unpublished LinkCard draft entry."""
+
+        form_values = await _configuration_form_values(request)
+        try:
+            index = _link_card_action_index(
+                form_values,
+                form_name=LINK_CARD_MOVE_INDEX_FORM_NAME,
+                action=f"move {direction.value}",
+            )
+            form_values.pop(LINK_CARD_MOVE_INDEX_FORM_NAME)
+            services.link_cards.move_draft_card_from_form(
+                form_values,
+                index,
+                direction,
+            )
+        except LinkCardDataError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        _log_configuration_change(
+            request,
+            f"moved a link-card draft entry {direction.value}",
+        )
+        return RedirectResponse(SiteRoute.CONFIG.value, status_code=303)
+
+    async def move_link_card_up(request: Request) -> RedirectResponse:
+        """Move a LinkCard draft entry one position upward."""
+
+        return await move_link_card(request, LinkCardMoveDirection.UP)
+
+    async def move_link_card_down(request: Request) -> RedirectResponse:
+        """Move a LinkCard draft entry one position downward."""
+
+        return await move_link_card(request, LinkCardMoveDirection.DOWN)
 
     async def save_link_card_draft(request: Request) -> RedirectResponse:
         """Persist the submitted in-memory LinkCard draft and publish it."""
@@ -156,6 +202,8 @@ def register_configuration_routes(
     app.post(SiteRoute.CONFIG_LINK_CARDS_DRAFT.value)(update_link_card_draft)
     app.post(SiteRoute.CONFIG_LINK_CARDS_ADD.value)(add_link_card)
     app.post(SiteRoute.CONFIG_LINK_CARDS_DELETE.value)(delete_link_card)
+    app.post(SiteRoute.CONFIG_LINK_CARDS_MOVE_UP.value)(move_link_card_up)
+    app.post(SiteRoute.CONFIG_LINK_CARDS_MOVE_DOWN.value)(move_link_card_down)
     app.post(SiteRoute.CONFIG_LINK_CARDS_SAVE.value)(save_link_card_draft)
 
 
@@ -195,16 +243,25 @@ def _link_card_draft_revision(request: Request) -> int | None:
     return revision
 
 
-def _link_card_delete_index(values: Mapping[str, object]) -> int:
-    """Read the non-negative draft-card index selected for deletion."""
+def _link_card_action_index(
+    values: Mapping[str, object],
+    *,
+    form_name: str,
+    action: str,
+) -> int:
+    """Read the non-negative draft-card index selected by a card action."""
 
-    value = values.get(LINK_CARD_DELETE_INDEX_FORM_NAME)
+    value = values.get(form_name)
     if not isinstance(value, str):
-        raise LinkCardDataError("Link-card delete request must identify a card.")
+        raise LinkCardDataError(f"Link-card {action} request must identify a card.")
     try:
         index = int(value)
     except ValueError as error:
-        raise LinkCardDataError("Link-card delete index must be an integer.") from error
+        raise LinkCardDataError(
+            f"Link-card {action} index must be an integer."
+        ) from error
     if index < 0:
-        raise LinkCardDataError("Link-card delete index must not be negative.")
+        raise LinkCardDataError(
+            f"Link-card {action} index must not be negative."
+        )
     return index

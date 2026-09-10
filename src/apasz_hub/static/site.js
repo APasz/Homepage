@@ -272,9 +272,6 @@ function configureLinkCardControls() {
             control instanceof HTMLSelectElement ||
             control instanceof HTMLTextAreaElement,
     );
-    const deleteButtons = [
-        ...form.querySelectorAll("button[data-link-card-delete]"),
-    ].filter((button) => button instanceof HTMLButtonElement);
     let draftTimer = 0;
     let inputRevision = 0;
     let draftStoreRevision = Number.parseInt(
@@ -303,14 +300,51 @@ function configureLinkCardControls() {
             return;
         }
         const card = control.closest("details[data-link-card-index]");
-        const summary = card?.querySelector(
-            `[data-link-card-summary="${field}"]`,
-        );
-        if (!(summary instanceof HTMLElement)) {
+        if (!(card instanceof HTMLElement)) {
             return;
         }
-        summary.textContent =
+        const value =
             field === "title" && !control.value ? "Untitled" : control.value;
+        const summary = card.querySelector(
+            `[data-link-card-summary="${field}"]`,
+        );
+        if (summary instanceof HTMLElement) {
+            summary.textContent = value;
+        }
+        if (field === "title") {
+            updateCardTitleReferences(card, value);
+        }
+    }
+
+    function updateCardTitleReferences(card, title) {
+        for (const action of card.querySelectorAll(
+            "button[data-link-card-delete], button[data-link-card-move]",
+        )) {
+            if (!(action instanceof HTMLButtonElement)) {
+                continue;
+            }
+            if (action.dataset.linkCardDelete !== undefined) {
+                action.setAttribute("aria-label", `Delete ${title}`);
+                continue;
+            }
+            const direction = action.dataset.linkCardMove;
+            if (direction) {
+                action.setAttribute("aria-label", `Move ${title} ${direction}`);
+            }
+        }
+        for (const trigger of card.querySelectorAll(
+            "button[data-icon-picker-card-title]",
+        )) {
+            if (!(trigger instanceof HTMLButtonElement)) {
+                continue;
+            }
+            trigger.dataset.iconPickerCardTitle = title;
+            const iconPath = trigger.textContent ?? "";
+            trigger.setAttribute(
+                "aria-label",
+                `Choose icon for ${title}. Current icon: ${iconPath}`,
+            );
+        }
     }
 
     function configureDestinationControls() {
@@ -449,12 +483,6 @@ function configureLinkCardControls() {
     configureDestinationControls();
     configureColourControls();
 
-    for (const deleteButton of deleteButtons) {
-        deleteButton.addEventListener("click", (event) => {
-            event.stopPropagation();
-        });
-    }
-
     for (const control of controls) {
         const updateDraft = () => {
             updateCardSummary(control);
@@ -479,6 +507,11 @@ function configureLinkCardControls() {
             submitter.dataset.linkCardDelete !== undefined
         ) {
             report("Deleting link…");
+        } else if (
+            submitter instanceof HTMLButtonElement &&
+            submitter.dataset.linkCardMove !== undefined
+        ) {
+            report("Moving link…");
         } else {
             report("Saving link cards…");
         }

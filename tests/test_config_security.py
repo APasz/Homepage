@@ -243,6 +243,8 @@ class ConfigSecurityTests(TestCase):
                     SiteRoute.CONFIG_LINK_CARDS_DRAFT.value,
                     SiteRoute.CONFIG_LINK_CARDS_ADD.value,
                     SiteRoute.CONFIG_LINK_CARDS_DELETE.value,
+                    SiteRoute.CONFIG_LINK_CARDS_MOVE_UP.value,
+                    SiteRoute.CONFIG_LINK_CARDS_MOVE_DOWN.value,
                     SiteRoute.CONFIG_LINK_CARDS_SAVE.value,
                 ):
                     writes.append(

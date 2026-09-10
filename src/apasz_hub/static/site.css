@@ -12,13 +12,13 @@
 }
 
 html {
-    min-width: 320px;
+    min-width: 280px;
     background: var(--color-canvas);
     scrollbar-gutter: stable both-edges;
 }
 
 body.site-body {
-    min-width: 320px;
+    min-width: 280px;
     min-height: 100dvh;
     margin: 0;
     background: var(--color-canvas);
@@ -411,7 +411,7 @@ textarea:focus-visible {
     display: none;
 }
 
-.link-card-manager__summary::after {
+.link-card-manager__indicator::after {
     color: var(--color-accent);
     content: "+";
     font-family: var(--font-mono);
@@ -424,7 +424,7 @@ textarea:focus-visible {
     background: var(--color-surface-hover);
 }
 
-.link-card-manager__card[open] .link-card-manager__summary::after {
+.link-card-manager__card[open] .link-card-manager__indicator::after {
     content: "−";
 }
 
@@ -466,8 +466,8 @@ textarea:focus-visible {
     text-transform: uppercase;
 }
 
-.link-card-manager__delete {
-    display: none;
+.link-card-manager__card-action {
+    display: inline-flex;
     min-height: 1.55rem;
     align-items: center;
     padding: 0.2rem 0.4rem;
@@ -480,16 +480,33 @@ textarea:focus-visible {
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+    white-space: nowrap;
 }
 
-.link-card-manager__card[open] .link-card-manager__delete {
-    display: inline-flex;
+.link-card-manager__card-actions {
+    display: none;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    padding: 0.65rem clamp(1rem, 2.5vw, 1.5rem);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface-hover);
 }
 
-.link-card-manager__delete:hover,
-.link-card-manager__delete:focus-visible {
+.link-card-manager__card[open] .link-card-manager__card-actions {
+    display: flex;
+}
+
+.link-card-manager__card-action:not(:disabled):hover,
+.link-card-manager__card-action:not(:disabled):focus-visible {
     border-color: var(--color-accent);
     color: var(--color-text);
+}
+
+.link-card-manager__card-action:disabled {
+    color: var(--color-subtle);
+    cursor: not-allowed;
+    opacity: 0.65;
 }
 
 .link-card-panel {

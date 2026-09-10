@@ -19,6 +19,7 @@ from apasz_hub.data import (
     LinkCardDataError,
     LinkCardDraftConflictError,
     LinkCardFormField,
+    LinkCardMoveDirection,
     LinkCardStore,
     link_card_draft_from_form,
     link_card_form_name,
@@ -435,6 +436,49 @@ class LinkCardDataTests(TestCase):
 
             with self.assertRaisesRegex(LinkCardDataError, "index -1"):
                 store.delete_draft_card(-1)
+
+    def test_store_moves_an_unpublished_card_with_current_form_edits(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            _write_cards(
+                path,
+                [_card("First destination"), _card("Second destination")],
+            )
+            store = LinkCardStore(path)
+            published_cards = store.load()
+            draft_revision = store.draft_revision
+            values = link_card_form_values(published_cards)
+            values[link_card_form_name(0, LinkCardFormField.TITLE)] = "Changed"
+
+            draft_cards = store.move_draft_card_from_form(
+                values,
+                0,
+                LinkCardMoveDirection.DOWN,
+            )
+
+        self.assertEqual(draft_cards[0], published_cards[1])
+        self.assertEqual(draft_cards[1].title, "Changed")
+        self.assertEqual(store.published_cards(), published_cards)
+        self.assertTrue(store.is_draft_dirty)
+        self.assertEqual(store.draft_revision, draft_revision + 1)
+
+    def test_store_rejects_moves_past_a_draft_boundary(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "link_cards.json"
+            _write_cards(
+                path,
+                [_card("First destination"), _card("Second destination")],
+            )
+            store = LinkCardStore(path)
+            published_cards = store.load()
+
+            with self.assertRaisesRegex(LinkCardDataError, "cannot move up"):
+                store.move_draft_card(0, LinkCardMoveDirection.UP)
+            with self.assertRaisesRegex(LinkCardDataError, "cannot move down"):
+                store.move_draft_card(1, LinkCardMoveDirection.DOWN)
+
+        self.assertEqual(store.draft_cards(), published_cards)
+        self.assertEqual(store.published_cards(), published_cards)
 
     def test_store_rejects_an_outdated_draft_update(self) -> None:
         with TemporaryDirectory() as temporary_directory:

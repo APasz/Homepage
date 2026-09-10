@@ -30,7 +30,10 @@ def register_configuration_authentication_routes(
 
         metadata = services.open_graph.published_metadata()
         return (
-            *document_metadata(metadata),
+            *document_metadata(
+                metadata,
+                document_title=f"Login · {metadata.title}",
+            ),
             configuration_login_page(failed=failed == "1"),
             response_header("Cache-Control", NO_STORE_CACHE_CONTROL),
         )

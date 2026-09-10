@@ -29,6 +29,35 @@ def _palette_values() -> dict[str, object]:
     return {color.token.value: color.value for color in load_theme_colors()}
 
 
+def _contrast_ratio(first: str, second: str) -> float:
+    """Return the WCAG contrast ratio between two validated hexadecimal colours."""
+
+    first_luminance = _relative_luminance(first)
+    second_luminance = _relative_luminance(second)
+    lighter, darker = sorted((first_luminance, second_luminance), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _relative_luminance(value: str) -> float:
+    """Convert a six-digit sRGB hexadecimal colour into relative luminance."""
+
+    red, green, blue = (int(value[index : index + 2], 16) for index in (1, 3, 5))
+    return (
+        0.2126 * _linearised_srgb_channel(red)
+        + 0.7152 * _linearised_srgb_channel(green)
+        + 0.0722 * _linearised_srgb_channel(blue)
+    )
+
+
+def _linearised_srgb_channel(channel: int) -> float:
+    """Return one 8-bit sRGB channel in linear-light form."""
+
+    srgb = channel / 255
+    if srgb <= 0.04045:
+        return srgb / 12.92
+    return ((srgb + 0.055) / 1.055) ** 2.4
+
+
 class ThemeColorDataTests(TestCase):
     """Keep editable palette data strict, persistent, and stylesheet-ready."""
 
@@ -190,3 +219,23 @@ class ThemeColorDataTests(TestCase):
             tuple(color.token for color in colors),
             tuple(ThemeColorToken),
         )
+
+    def test_checked_in_palette_has_sufficient_non_text_contrast(self) -> None:
+        """Keep UI borders and accent insets discernible across dark surfaces."""
+
+        colors = load_theme_colors(DEFAULT_THEME_COLORS_PATH)
+        values = {color.token: color.value for color in colors}
+        backgrounds = (
+            ThemeColorToken.CANVAS,
+            ThemeColorToken.SURFACE,
+            ThemeColorToken.SURFACE_RAISED,
+            ThemeColorToken.SURFACE_HOVER,
+        )
+
+        for boundary in (ThemeColorToken.BORDER, ThemeColorToken.ACCENT_MUTED):
+            for background in backgrounds:
+                with self.subTest(boundary=boundary, background=background):
+                    self.assertGreaterEqual(
+                        _contrast_ratio(values[boundary], values[background]),
+                        3.0,
+                    )

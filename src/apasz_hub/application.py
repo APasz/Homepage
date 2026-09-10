@@ -71,7 +71,7 @@ def _error_handler(
 ) -> ErrorHandler:
     """Build one palette-aware FastHTML exception handler."""
 
-    def handle(_request: Request, exception: Exception) -> PageResponse:
+    async def handle(_request: Request, exception: Exception) -> PageResponse:
         http_exception = exception if isinstance(exception, HTTPException) else None
         return _public_error_response(services, status, http_exception)
 
@@ -81,7 +81,10 @@ def _error_handler(
 def _http_exception_handler(services: ApplicationServices) -> ErrorHandler:
     """Build the handler that upgrades declared public 404 and 500 errors."""
 
-    def handle(_request: Request, exception: Exception) -> PageResponse | Response:
+    async def handle(
+        _request: Request,
+        exception: Exception,
+    ) -> PageResponse | Response:
         if not isinstance(exception, HTTPException):
             raise TypeError("HTTP exception handler received a non-HTTP exception.")
         try:

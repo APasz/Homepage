@@ -6,11 +6,13 @@ from apasz_hub.components import ButtonStyle, button_class
 from apasz_hub.data import (
     LINK_CARD_COLOUR_CONTROL_PAIRS,
     LINK_CARD_DELETE_INDEX_FORM_NAME,
+    LINK_CARD_MOVE_INDEX_FORM_NAME,
     CardKind,
     CardTier,
     IconAsset,
     LinkCard,
     LinkCardFormField,
+    LinkCardMoveDirection,
 )
 from apasz_hub.framework import (
     H2,
@@ -62,7 +64,7 @@ def link_card_manager(
             csrf_token_input(csrf_token),
             Div(
                 *(
-                    _card_editor(card, index, colors)
+                    _card_editor(card, index, len(cards), colors)
                     for index, card in enumerate(cards)
                 ),
                 cls="link-card-manager__list",
@@ -104,7 +106,12 @@ def link_card_manager(
     )
 
 
-def _card_editor(card: LinkCard, index: int, colors: ThemeColors) -> HtmlNode:
+def _card_editor(
+    card: LinkCard,
+    index: int,
+    card_count: int,
+    colors: ThemeColors,
+) -> HtmlNode:
     """Render one editable LinkCard panel with native disclosure behavior."""
 
     return Details(
@@ -125,25 +132,77 @@ def _card_editor(card: LinkCard, index: int, colors: ThemeColors) -> HtmlNode:
                     data_link_card_summary=LinkCardFormField.SCHEMA.value,
                     cls="link-card-manager__schema",
                 ),
-                Button(
-                    "Delete",
-                    type="submit",
-                    formaction=SiteRoute.CONFIG_LINK_CARDS_DELETE.value,
-                    formnovalidate="",
-                    name=LINK_CARD_DELETE_INDEX_FORM_NAME,
-                    value=str(index),
-                    aria_label=f"Delete {card.title}",
-                    data_link_card_delete="",
-                    cls="link-card-manager__delete",
-                ),
                 cls="link-card-manager__meta",
             ),
+            Span(
+                aria_hidden="true",
+                cls="link-card-manager__indicator",
+            ),
             cls="link-card-manager__summary",
+        ),
+        Div(
+            _move_button(
+                card,
+                index,
+                LinkCardMoveDirection.UP,
+                disabled=index == 0,
+            ),
+            _move_button(
+                card,
+                index,
+                LinkCardMoveDirection.DOWN,
+                disabled=index == card_count - 1,
+            ),
+            Button(
+                "Delete",
+                type="submit",
+                formaction=SiteRoute.CONFIG_LINK_CARDS_DELETE.value,
+                formnovalidate="",
+                name=LINK_CARD_DELETE_INDEX_FORM_NAME,
+                value=str(index),
+                aria_label=f"Delete {card.title}",
+                data_link_card_delete="",
+                cls="link-card-manager__card-action link-card-manager__delete",
+            ),
+            cls="link-card-manager__card-actions",
         ),
         _control_panel(card, index, colors),
         data_link_card_index=str(index),
         cls="link-card-manager__card",
     )
+
+
+def _move_button(
+    card: LinkCard,
+    index: int,
+    direction: LinkCardMoveDirection,
+    *,
+    disabled: bool,
+) -> HtmlNode:
+    """Render one adjacent draft-reordering action for a LinkCard."""
+
+    attributes = {
+        "type": "submit",
+        "formaction": _move_route(direction).value,
+        "name": LINK_CARD_MOVE_INDEX_FORM_NAME,
+        "value": str(index),
+        "aria_label": f"Move {card.title} {direction.value}",
+        "data_link_card_move": direction.value,
+        "cls": "link-card-manager__card-action link-card-manager__move",
+    }
+    if disabled:
+        attributes["disabled"] = ""
+    return Button(f"Move {direction.value}", **attributes)
+
+
+def _move_route(direction: LinkCardMoveDirection) -> SiteRoute:
+    """Return the dedicated configuration endpoint for one move direction."""
+
+    if direction is LinkCardMoveDirection.UP:
+        return SiteRoute.CONFIG_LINK_CARDS_MOVE_UP
+    if direction is LinkCardMoveDirection.DOWN:
+        return SiteRoute.CONFIG_LINK_CARDS_MOVE_DOWN
+    raise ValueError(f"Unsupported LinkCard move direction: {direction!r}")
 
 
 def _control_panel(card: LinkCard, index: int, colors: ThemeColors) -> HtmlNode:
