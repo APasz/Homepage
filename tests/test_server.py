@@ -11,16 +11,22 @@ from unittest.mock import AsyncMock, Mock, patch
 from starlette.types import Message, Scope
 
 from apasz_hub import framework
-from apasz_hub.application import create_application
+from apasz_hub.application import STARTUP_EMAIL_DETAIL, create_application
+from apasz_hub.notifications import DISABLED_EMAIL_NOTIFICATIONS
 from apasz_hub.services import ApplicationServices, create_application_services
+from apasz_hub.settings import EmailNotificationEvent
 
 
 class ApplicationServicesTests(TestCase):
     """Keep application instances isolated from one another."""
 
     def test_application_service_bundles_have_independent_github_caches(self) -> None:
-        first = create_application_services()
-        second = create_application_services()
+        first = create_application_services(
+            email_notifications=DISABLED_EMAIL_NOTIFICATIONS
+        )
+        second = create_application_services(
+            email_notifications=DISABLED_EMAIL_NOTIFICATIONS
+        )
 
         self.assertIsNot(
             first.github_repository_counts,
@@ -87,6 +93,8 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
         link_card_store = Mock()
         theme_color_store = Mock()
         open_graph_store = Mock()
+        email_notifications = Mock()
+        email_notifications.notify = AsyncMock()
         test_app = create_application(
             ApplicationServices(
                 link_cards=link_card_store,
@@ -94,6 +102,7 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
                 open_graph=open_graph_store,
                 github_repository_counts=Mock(),
                 github_repository_refresher=refresher,
+                email_notifications=email_notifications,
             ),
         )
 
@@ -124,6 +133,10 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
         link_card_store.load.assert_called_once_with()
         refresher.start.assert_called_once_with()
         refresher.stop.assert_awaited_once_with()
+        email_notifications.notify.assert_awaited_once_with(
+            EmailNotificationEvent.STARTUP,
+            STARTUP_EMAIL_DETAIL,
+        )
         self.assertEqual(
             [message["type"] for message in sent],
             ["lifespan.startup.complete", "lifespan.shutdown.complete"],

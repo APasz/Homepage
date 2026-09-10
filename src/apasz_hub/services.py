@@ -10,7 +10,13 @@ from apasz_hub.github import (
     GithubRepositoryCountRefresher,
     fetch_public_repository_count,
 )
+from apasz_hub.notifications import (
+    DISABLED_EMAIL_NOTIFICATIONS,
+    EmailNotificationDispatcher,
+    email_notification_service,
+)
 from apasz_hub.open_graph import OpenGraphStore
+from apasz_hub.settings import load_settings
 from apasz_hub.theme import ThemeColorStore
 
 
@@ -23,6 +29,7 @@ class ApplicationServices:
     open_graph: OpenGraphStore
     github_repository_counts: GithubRepositoryCountCache
     github_repository_refresher: GithubRepositoryCountRefresher
+    email_notifications: EmailNotificationDispatcher = DISABLED_EMAIL_NOTIFICATIONS
 
 
 def create_application_services(
@@ -31,6 +38,7 @@ def create_application_services(
     theme_colors: ThemeColorStore | None = None,
     open_graph: OpenGraphStore | None = None,
     github_repository_counts: GithubRepositoryCountCache | None = None,
+    email_notifications: EmailNotificationDispatcher | None = None,
 ) -> ApplicationServices:
     """Build a consistently wired set of application-owned services."""
 
@@ -42,6 +50,11 @@ def create_application_services(
         if github_repository_counts is None
         else github_repository_counts
     )
+    notifications = (
+        email_notification_service(load_settings())
+        if email_notifications is None
+        else email_notifications
+    )
     return ApplicationServices(
         link_cards=card_store,
         theme_colors=color_store,
@@ -51,4 +64,5 @@ def create_application_services(
             repository_counts,
             card_store.published_cards,
         ),
+        email_notifications=notifications,
     )

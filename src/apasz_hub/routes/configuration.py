@@ -12,6 +12,11 @@ from starlette.responses import RedirectResponse, Response
 
 from apasz_hub import config_security
 from apasz_hub.components import document_metadata, theme_color_meta
+from apasz_hub.configuration_notifications import (
+    link_cards_notification_detail,
+    open_graph_notification_detail,
+    theme_colors_notification_detail,
+)
 from apasz_hub.data import (
     LINK_CARD_DELETE_INDEX_FORM_NAME,
     LINK_CARD_MOVE_INDEX_FORM_NAME,
@@ -26,6 +31,7 @@ from apasz_hub.open_graph import OpenGraphDataError
 from apasz_hub.pages import configuration_page
 from apasz_hub.routes.paths import SiteRoute
 from apasz_hub.services import ApplicationServices
+from apasz_hub.settings import EmailNotificationEvent
 from apasz_hub.theme import ThemeColorDataError
 
 LINK_CARD_DRAFT_REVISION_HEADER: Final = "X-Link-Card-Draft-Revision"
@@ -74,20 +80,34 @@ def register_configuration_routes(
         """Validate, persist, and publish one submitted shared palette."""
 
         try:
-            services.theme_colors.save(await _configuration_form_values(request))
+            previous_colors = services.theme_colors.published_colors()
+            current_colors = services.theme_colors.save(
+                await _configuration_form_values(request)
+            )
         except ThemeColorDataError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         _log_configuration_change(request, "saved site colours")
+        await _notify_configuration_saved(
+            services,
+            theme_colors_notification_detail(previous_colors, current_colors),
+        )
         return RedirectResponse(f"{SiteRoute.CONFIG.value}?saved=1", status_code=303)
 
     async def save_open_graph(request: Request) -> RedirectResponse:
         """Validate, persist, and publish submitted social sharing metadata."""
 
         try:
-            services.open_graph.save(await _configuration_form_values(request))
+            previous_metadata = services.open_graph.published_metadata()
+            current_metadata = services.open_graph.save(
+                await _configuration_form_values(request)
+            )
         except OpenGraphDataError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         _log_configuration_change(request, "saved Open Graph metadata")
+        await _notify_configuration_saved(
+            services,
+            open_graph_notification_detail(previous_metadata, current_metadata),
+        )
         return RedirectResponse(
             f"{SiteRoute.CONFIG.value}?open_graph_saved=1",
             status_code=303,
@@ -185,12 +205,17 @@ def register_configuration_routes(
         """Persist the submitted in-memory LinkCard draft and publish it."""
 
         try:
+            previous_cards = services.link_cards.published_cards()
             services.link_cards.update_draft(await _configuration_form_values(request))
-            services.link_cards.save_draft()
+            current_cards = services.link_cards.save_draft()
         except LinkCardDataError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         services.github_repository_refresher.refresh_in_background()
         _log_configuration_change(request, "published link cards")
+        await _notify_configuration_saved(
+            services,
+            link_cards_notification_detail(previous_cards, current_cards),
+        )
         return RedirectResponse(
             f"{SiteRoute.CONFIG.value}?link_cards_saved=1",
             status_code=303,
@@ -223,6 +248,18 @@ def _log_configuration_change(request: Request, action: str) -> None:
         "Configuration %s from %s.",
         action,
         config_security.configuration_client(request),
+    )
+
+
+async def _notify_configuration_saved(
+    services: ApplicationServices,
+    detail: str,
+) -> None:
+    """Deliver the common post-persistence notification without duplicating its event."""
+
+    await services.email_notifications.notify(
+        EmailNotificationEvent.CONFIGURATION_SAVED,
+        detail,
     )
 
 
@@ -261,7 +298,5 @@ def _link_card_action_index(
             f"Link-card {action} index must be an integer."
         ) from error
     if index < 0:
-        raise LinkCardDataError(
-            f"Link-card {action} index must not be negative."
-        )
+        raise LinkCardDataError(f"Link-card {action} index must not be negative.")
     return index

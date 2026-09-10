@@ -21,12 +21,22 @@ from apasz_hub.settings import (
     DEFAULT_PORT,
     DEFAULT_PUBLIC_ORIGIN,
     DOTENV_PATH,
+    EMAIL_FROM_ENV,
+    EMAIL_NOTIFICATION_EVENTS_ENV,
+    EMAIL_SMTP_HOST_ENV,
+    EMAIL_SMTP_PASSWORD_ENV,
+    EMAIL_SMTP_PORT_ENV,
+    EMAIL_SMTP_SECURITY_ENV,
+    EMAIL_SMTP_USERNAME_ENV,
+    EMAIL_TO_ENV,
     HOST_ENV,
     OPEN_GRAPH_PATH_ENV,
     PORT_ENV,
     PROJECT_ROOT,
     PUBLIC_ORIGIN_ENV,
     ApplicationSettings,
+    EmailNotificationEvent,
+    EmailSmtpSecurity,
     SettingsValidationError,
     load_settings,
 )
@@ -129,6 +139,121 @@ class ApplicationSettingsTests(TestCase):
         configured = load_settings({OPEN_GRAPH_PATH_ENV: path})
 
         self.assertEqual(configured.open_graph_path, Path(path))
+
+    def test_email_notification_settings_parse_an_authenticated_smtp_setup(
+        self,
+    ) -> None:
+        configured = load_settings(
+            {
+                EMAIL_NOTIFICATION_EVENTS_ENV: "startup,configuration_saved",
+                EMAIL_SMTP_HOST_ENV: "smtp.example.com",
+                EMAIL_SMTP_PORT_ENV: "465",
+                EMAIL_SMTP_SECURITY_ENV: "ssl",
+                EMAIL_SMTP_USERNAME_ENV: "hub-user",
+                EMAIL_SMTP_PASSWORD_ENV: "sensitive-password",
+                EMAIL_FROM_ENV: "hub@example.com",
+                EMAIL_TO_ENV: "owner@example.com, backup@example.com",
+            }
+        )
+
+        self.assertEqual(
+            configured.email_notification_events,
+            frozenset(
+                (
+                    EmailNotificationEvent.STARTUP,
+                    EmailNotificationEvent.CONFIGURATION_SAVED,
+                )
+            ),
+        )
+        self.assertEqual(configured.email_smtp_host, "smtp.example.com")
+        self.assertEqual(configured.email_smtp_port, 465)
+        self.assertIs(configured.email_smtp_security, EmailSmtpSecurity.SSL)
+        self.assertEqual(configured.email_smtp_username, "hub-user")
+        self.assertIsNotNone(configured.email_smtp_password)
+        self.assertEqual(configured.email_from, "hub@example.com")
+        self.assertEqual(
+            configured.email_to,
+            ("owner@example.com", "backup@example.com"),
+        )
+
+    def test_email_smtp_security_normalises_common_input_labels(self) -> None:
+        for value, expected in (
+            ("STARTTLS", EmailSmtpSecurity.STARTTLS),
+            ("SSL/TLS ", EmailSmtpSecurity.SSL),
+        ):
+            with self.subTest(value=value):
+                configured = load_settings({EMAIL_SMTP_SECURITY_ENV: value})
+
+                self.assertIs(configured.email_smtp_security, expected)
+
+    def test_dotenv_parses_comma_separated_email_notification_values(self) -> None:
+        dotenv_document = "\n".join(
+            (
+                f"{EMAIL_NOTIFICATION_EVENTS_ENV}=startup,configuration_saved",
+                f"{EMAIL_SMTP_HOST_ENV}=smtp.example.com",
+                f"{EMAIL_FROM_ENV}=hub@example.com",
+                f"{EMAIL_TO_ENV}=owner@example.com,backup@example.com",
+            )
+        )
+        with (
+            _temporary_dotenv(dotenv_document),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            configured = load_settings()
+
+        self.assertEqual(
+            configured.email_notification_events,
+            frozenset(
+                (
+                    EmailNotificationEvent.STARTUP,
+                    EmailNotificationEvent.CONFIGURATION_SAVED,
+                )
+            ),
+        )
+        self.assertEqual(
+            configured.email_to,
+            ("owner@example.com", "backup@example.com"),
+        )
+
+    def test_enabled_email_notifications_require_delivery_addresses_and_host(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            SettingsValidationError,
+            "EMAIL_SMTP_HOST, EMAIL_FROM, EMAIL_TO must be supplied",
+        ):
+            load_settings({EMAIL_NOTIFICATION_EVENTS_ENV: "startup"})
+
+    def test_email_smtp_credentials_must_be_supplied_together(self) -> None:
+        with self.assertRaisesRegex(
+            SettingsValidationError,
+            "EMAIL_SMTP_USERNAME and EMAIL_SMTP_PASSWORD must be supplied together",
+        ) as raised:
+            load_settings({EMAIL_SMTP_PASSWORD_ENV: "sensitive-password"})
+
+        self.assertNotIn("sensitive-password", str(raised.exception))
+
+    def test_smtp_credentials_must_be_ascii(self) -> None:
+        for environment_name in (EMAIL_SMTP_USERNAME_ENV, EMAIL_SMTP_PASSWORD_ENV):
+            with (
+                self.subTest(environment_name=environment_name),
+                self.assertRaisesRegex(
+                    SettingsValidationError,
+                    "SMTP authentication values must contain only ASCII characters",
+                ),
+            ):
+                load_settings({environment_name: "credential-☃"})
+
+    def test_email_addresses_must_be_single_header_safe_mailboxes(self) -> None:
+        for environment_name in (EMAIL_FROM_ENV, EMAIL_TO_ENV):
+            with (
+                self.subTest(environment_name=environment_name),
+                self.assertRaisesRegex(
+                    SettingsValidationError,
+                    "mailbox address",
+                ),
+            ):
+                load_settings({environment_name: "hub@example.com;unexpected"})
 
     def test_invalid_cookie_override_fails_without_echoing_secrets(self) -> None:
         with self.assertRaisesRegex(

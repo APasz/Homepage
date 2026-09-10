@@ -7,15 +7,17 @@ from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 from unittest import TestCase
 from unittest.mock import patch
 
 import httpx
+from starlette.types import Message, Scope
 
 from apasz_hub import config_security
-from apasz_hub.app import app
 from apasz_hub.application import create_application
 from apasz_hub.framework import FastHTMLApp
+from apasz_hub.notifications import DISABLED_EMAIL_NOTIFICATIONS
 from apasz_hub.routes.paths import SiteRoute
 from apasz_hub.services import create_application_services
 from apasz_hub.theme import (
@@ -35,6 +37,9 @@ TEST_ENVIRONMENT = {
     .rstrip("="),
     config_security.PUBLIC_ORIGIN_ENV: TEST_ORIGIN,
 }
+app = create_application(
+    create_application_services(email_notifications=DISABLED_EMAIL_NOTIFICATIONS)
+)
 
 
 def _access(
@@ -250,11 +255,64 @@ class ConfigSecurityTests(TestCase):
         ):
             response = asyncio.run(invalid_login())
 
-        expected_origin = "x" * (
-            config_security.MAX_LOGGED_SOURCE_METADATA_LENGTH - 1
-        ) + "…"
+        expected_origin = (
+            "x" * (config_security.MAX_LOGGED_SOURCE_METADATA_LENGTH - 1) + "…"
+        )
         self.assertEqual(response.status_code, 403)
         self.assertIn(f"origin={expected_origin!r}", logs.output[0])
+
+    def test_non_ascii_fetch_site_metadata_is_rejected_without_a_server_error(
+        self,
+    ) -> None:
+        """Treat malformed raw Fetch Metadata as untrusted rather than raising."""
+
+        async def request_with_malformed_metadata() -> tuple[Message, ...]:
+            sent: list[Message] = []
+
+            async def receive() -> Message:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message: Message) -> None:
+                sent.append(message)
+
+            scope = cast(
+                Scope,
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0", "spec_version": "2.3"},
+                    "http_version": "1.1",
+                    "scheme": "https",
+                    "method": "POST",
+                    "root_path": "",
+                    "path": SiteRoute.CONFIG_LOGIN.value,
+                    "raw_path": SiteRoute.CONFIG_LOGIN.value.encode(),
+                    "query_string": b"",
+                    "headers": [
+                        (b"host", b"testserver"),
+                        (b"sec-fetch-site", b"same-or\xe9gin"),
+                    ],
+                    "client": ("127.0.0.1", 1234),
+                    "server": ("testserver", 443),
+                    "extensions": {},
+                },
+            )
+            await app(scope, receive, send)
+            return tuple(sent)
+
+        access = _access()
+        with (
+            patch.object(config_security, "CONFIG_ACCESS", access),
+            self.assertLogs("apasz_hub.config_security", level="WARNING") as logs,
+        ):
+            messages = asyncio.run(request_with_malformed_metadata())
+
+        response_status = next(
+            cast(int, message["status"])
+            for message in messages
+            if message["type"] == "http.response.start"
+        )
+        self.assertEqual(response_status, 403)
+        self.assertEqual(len(logs.output), 1)
 
     def test_unauthenticated_requests_cannot_reach_any_config_write_route(self) -> None:
         async def make_requests() -> tuple[
@@ -428,9 +486,7 @@ class ConfigSecurityTests(TestCase):
         self.assertEqual(cross_site_fetch.status_code, 403)
         self.assertEqual(wrong_origin.status_code, 403)
         self.assertEqual(same_origin_fetch.status_code, 303)
-        self.assertEqual(
-            same_origin_fetch.headers["location"], SiteRoute.CONFIG.value
-        )
+        self.assertEqual(same_origin_fetch.headers["location"], SiteRoute.CONFIG.value)
         self.assertEqual(null_origin_same_origin_fetch.status_code, 303)
         self.assertEqual(
             null_origin_same_origin_fetch.headers["location"], SiteRoute.CONFIG.value
@@ -520,7 +576,10 @@ class ConfigSecurityTests(TestCase):
             access = _access()
             theme_color_store = ThemeColorStore(path)
             test_app = create_application(
-                create_application_services(theme_colors=theme_color_store),
+                create_application_services(
+                    theme_colors=theme_color_store,
+                    email_notifications=DISABLED_EMAIL_NOTIFICATIONS,
+                ),
             )
             with (
                 patch.object(config_security, "CONFIG_ACCESS", access),

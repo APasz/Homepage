@@ -6,7 +6,7 @@ import asyncio
 import re
 from base64 import urlsafe_b64encode
 from collections.abc import Coroutine, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Never
@@ -22,7 +22,6 @@ except ModuleNotFoundError:
     uvloop = None
 
 from apasz_hub import config_security
-from apasz_hub.app import app
 from apasz_hub.application import STATIC_DIRECTORY, create_application
 from apasz_hub.components import (
     document_headers,
@@ -66,6 +65,10 @@ from apasz_hub.middleware import (
     SECURITY_HEADERS,
     STATIC_CACHE_CONTROL,
 )
+from apasz_hub.notifications import (
+    DISABLED_EMAIL_NOTIFICATIONS,
+    EmailNotificationDispatcher,
+)
 from apasz_hub.open_graph import (
     DEFAULT_OPEN_GRAPH_PATH,
     OPEN_GRAPH_FIELD_DEFINITIONS,
@@ -84,6 +87,7 @@ from apasz_hub.routes.configuration import LINK_CARD_DRAFT_REVISION_HEADER
 from apasz_hub.routes.paths import SiteRoute
 from apasz_hub.routes.public import ROBOTS_CACHE_CONTROL, ROBOTS_TEXT
 from apasz_hub.services import create_application_services
+from apasz_hub.settings import EmailNotificationEvent
 from apasz_hub.theme import (
     DEFAULT_THEME_COLORS_PATH,
     ERROR_COLOUR,
@@ -111,6 +115,9 @@ CONFIG_TEST_ENVIRONMENT = {
     .rstrip("="),
     config_security.PUBLIC_ORIGIN_ENV: CONFIG_TEST_ORIGIN,
 }
+app = create_application(
+    create_application_services(email_notifications=DISABLED_EMAIL_NOTIFICATIONS)
+)
 
 type _ApplicationResponses = tuple[
     httpx.Response,
@@ -120,6 +127,20 @@ type _ApplicationResponses = tuple[
     httpx.Response,
     httpx.Response,
 ]
+
+
+@dataclass(slots=True)
+class _RecordingEmailNotifications:
+    """Capture routed notification events without opening an SMTP connection."""
+
+    notifications: list[tuple[EmailNotificationEvent, str]] = field(
+        default_factory=list,
+    )
+
+    async def notify(self, event: EmailNotificationEvent, detail: str) -> None:
+        """Retain one routed notification for later assertion."""
+
+        self.notifications.append((event, detail))
 
 
 def _config_access() -> config_security.ConfigAccess:
@@ -178,6 +199,7 @@ def _isolated_application(
     theme_colors: ThemeColorStore | None = None,
     open_graph: OpenGraphStore | None = None,
     github_repository_counts: GithubRepositoryCountCache | None = None,
+    email_notifications: EmailNotificationDispatcher | None = None,
 ) -> FastHTMLApp:
     """Build an application whose mutable collaborators belong to one test."""
 
@@ -190,6 +212,11 @@ def _isolated_application(
                 _repository_count_cache()
                 if github_repository_counts is None
                 else github_repository_counts
+            ),
+            email_notifications=(
+                DISABLED_EMAIL_NOTIFICATIONS
+                if email_notifications is None
+                else email_notifications
             ),
         ),
     )
@@ -312,7 +339,7 @@ class HomepageTests(TestCase):
         self.assertEqual(document.count('data-link-card-move="down"'), len(cards))
         self.assertEqual(document.count('formnovalidate=""'), len(cards))
         self.assertEqual(
-            document.count('link-card-manager__indicator'),
+            document.count("link-card-manager__indicator"),
             len(cards),
         )
         for summary in document.split("<summary")[1:]:
@@ -1017,7 +1044,11 @@ class HomepageTests(TestCase):
                     )
 
             access = _config_access()
-            test_app = _isolated_application(link_cards=store)
+            notifications = _RecordingEmailNotifications()
+            test_app = _isolated_application(
+                link_cards=store,
+                email_notifications=notifications,
+            )
             with patch.object(config_security, "CONFIG_ACCESS", access):
                 (
                     draft_response,
@@ -1047,6 +1078,18 @@ class HomepageTests(TestCase):
         self.assertIn(draft_title, published_after_save.text)
         self.assertEqual(saved_cards[0].title, draft_title)
         self.assertFalse(store.is_draft_dirty)
+        self.assertEqual(
+            notifications.notifications,
+            [
+                (
+                    EmailNotificationEvent.CONFIGURATION_SAVED,
+                    (
+                        "Your link cards are live.\n\nWhat changed:\n"
+                        f'- Renamed "{original_title}" -> "{draft_title}".'
+                    ),
+                )
+            ],
+        )
 
     def test_publishing_link_cards_refreshes_current_github_cards_in_background(
         self,
@@ -1321,9 +1364,7 @@ class HomepageTests(TestCase):
                         headers=_config_headers(csrf_token),
                         follow_redirects=False,
                     )
-                    moved_titles = tuple(
-                        card.title for card in store.draft_cards()
-                    )
+                    moved_titles = tuple(card.title for card in store.draft_cards())
                     move_up_values = link_card_form_values(store.draft_cards())
                     move_up_values[LINK_CARD_MOVE_INDEX_FORM_NAME] = "1"
                     move_up_response = await client.post(
@@ -1359,7 +1400,11 @@ class HomepageTests(TestCase):
         self.assertEqual(move_response.headers["location"], SiteRoute.CONFIG.value)
         self.assertEqual(
             moved_titles,
-            (original_cards[1].title, updated_title, *(card.title for card in original_cards[2:])),
+            (
+                original_cards[1].title,
+                updated_title,
+                *(card.title for card in original_cards[2:]),
+            ),
         )
         self.assertEqual(move_up_response.status_code, 303)
         self.assertEqual(move_up_response.headers["location"], SiteRoute.CONFIG.value)
@@ -1447,7 +1492,11 @@ class HomepageTests(TestCase):
             store = ThemeColorStore(path)
             published_colors = store.load()
             access = _config_access()
-            test_app = _isolated_application(theme_colors=store)
+            notifications = _RecordingEmailNotifications()
+            test_app = _isolated_application(
+                theme_colors=store,
+                email_notifications=notifications,
+            )
             with patch.object(config_security, "CONFIG_ACCESS", access):
                 save_response, config_response, theme_response = asyncio.run(
                     save_palette(test_app, access),
@@ -1472,6 +1521,18 @@ class HomepageTests(TestCase):
                 if color.token is ThemeColorToken.CANVAS
             ),
             "#123456",
+        )
+        self.assertEqual(
+            notifications.notifications,
+            [
+                (
+                    EmailNotificationEvent.CONFIGURATION_SAVED,
+                    (
+                        "Your site colours are live.\n\nWhat changed:\n"
+                        "- Canvas: #000000 -> #123456"
+                    ),
+                )
+            ],
         )
 
     def test_configuration_save_rejects_invalid_colours_without_writing(self) -> None:
@@ -1547,7 +1608,11 @@ class HomepageTests(TestCase):
             store = OpenGraphStore(path)
             published_metadata = store.load()
             access = _config_access()
-            test_app = _isolated_application(open_graph=store)
+            notifications = _RecordingEmailNotifications()
+            test_app = _isolated_application(
+                open_graph=store,
+                email_notifications=notifications,
+            )
             with patch.object(config_security, "CONFIG_ACCESS", access):
                 save_response, config_response, homepage_response = asyncio.run(
                     save_open_graph(test_app, access)
@@ -1587,6 +1652,23 @@ class HomepageTests(TestCase):
         self.assertIn(
             '<meta name="twitter:card" content="summary_large_image">',
             homepage_response.text,
+        )
+        self.assertEqual(
+            notifications.notifications,
+            [
+                (
+                    EmailNotificationEvent.CONFIGURATION_SAVED,
+                    (
+                        "Your sharing info is live.\n\nWhat changed:\n"
+                        '- Site name: "APasz" -> "APasz Labs"\n'
+                        '- Title: "APasz" -> "APasz Studio"\n'
+                        "- Description: "
+                        '"The public APasz hub for code, community, and contact links" '
+                        '-> "A custom sharing description."\n'
+                        '- Image URL: not set -> "https://example.com/share.png"'
+                    ),
+                )
+            ],
         )
 
 

@@ -30,8 +30,10 @@ from apasz_hub.routes.authentication import (
 from apasz_hub.routes.configuration import register_configuration_routes
 from apasz_hub.routes.public import register_public_routes
 from apasz_hub.services import ApplicationServices
+from apasz_hub.settings import EmailNotificationEvent
 
 STATIC_DIRECTORY: Final = Path(__file__).parent / "static"
+STARTUP_EMAIL_DETAIL: Final = "APasz Hub is up and running."
 
 
 def create_application(services: ApplicationServices) -> FastHTMLApp:
@@ -133,6 +135,10 @@ def _startup(services: ApplicationServices) -> LifecycleHook:
         services.link_cards.load()
         config_security.CONFIG_ACCESS.settings()
         services.github_repository_refresher.start()
+        await services.email_notifications.notify(
+            EmailNotificationEvent.STARTUP,
+            STARTUP_EMAIL_DETAIL,
+        )
 
     return start_application
 

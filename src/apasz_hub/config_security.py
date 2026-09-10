@@ -769,7 +769,10 @@ def _fetch_site_validation(fetch_site: str | None) -> RequestSourceValidation:
 
     if fetch_site is None:
         return RequestSourceValidation.MISSING
-    if hmac.compare_digest(fetch_site.casefold(), SAME_ORIGIN_FETCH_SITE):
+    if fetch_site.isascii() and hmac.compare_digest(
+        fetch_site.casefold(),
+        SAME_ORIGIN_FETCH_SITE,
+    ):
         return RequestSourceValidation.TRUSTED
     return RequestSourceValidation.UNTRUSTED
 
@@ -789,7 +792,7 @@ def _bounded_source_metadata(value: str | None) -> str | None:
 
     if value is None or len(value) <= MAX_LOGGED_SOURCE_METADATA_LENGTH:
         return value
-    return f"{value[:MAX_LOGGED_SOURCE_METADATA_LENGTH - 1]}…"
+    return f"{value[: MAX_LOGGED_SOURCE_METADATA_LENGTH - 1]}…"
 
 
 def _set_request_session(scope: Scope, session: ConfigSession) -> None:

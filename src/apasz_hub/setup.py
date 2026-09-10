@@ -1,9 +1,10 @@
-"""Interactive, safe setup for the private configuration editor."""
+"""Interactive setup for private configuration access and optional SMTP email."""
 
 from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
 import secrets
 import stat
@@ -21,15 +22,33 @@ from apasz_hub.settings import (
     CONFIG_COOKIE_SECURE_ENV,
     CONFIG_PASSWORD_HASH_ENV,
     CONFIG_SESSION_SECRET_ENV,
+    DEFAULT_EMAIL_SMTP_PORT,
     DEFAULT_PUBLIC_ORIGIN,
     DOTENV_PATH,
+    EMAIL_FROM_ENV,
+    EMAIL_NOTIFICATION_EVENTS_ENV,
+    EMAIL_SMTP_HOST_ENV,
+    EMAIL_SMTP_PASSWORD_ENV,
+    EMAIL_SMTP_PORT_ENV,
+    EMAIL_SMTP_SECURITY_ENV,
+    EMAIL_SMTP_USERNAME_ENV,
+    EMAIL_TO_ENV,
     PROJECT_ROOT,
     PUBLIC_ORIGIN_ENV,
+    EmailNotificationEvent,
+    EmailSmtpSecurity,
+    SettingsValidationError,
+    load_settings,
 )
 
 DOTENV_FILE_MODE: Final[int] = stat.S_IRUSR | stat.S_IWUSR
 
 type PasswordPrompt = Callable[[str], str]
+type TextPrompt = Callable[[str], str]
+
+DEFAULT_EMAIL_NOTIFICATION_EVENTS: Final = ",".join(
+    event.value for event in EmailNotificationEvent
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +70,20 @@ class _AccessCredentials:
     cookie_secure: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _EmailConfiguration:
+    """Validated SMTP notification values selected during interactive setup."""
+
+    events: frozenset[EmailNotificationEvent]
+    smtp_host: str
+    smtp_port: int
+    smtp_security: EmailSmtpSecurity
+    sender: str
+    recipients: tuple[str, ...]
+    smtp_username: str | None = None
+    smtp_password: str | None = field(default=None, repr=False)
+
+
 class SetupError(RuntimeError):
     """Raised when interactive setup cannot safely create a configuration."""
 
@@ -59,8 +92,9 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     password_prompt: PasswordPrompt = getpass.getpass,
+    text_prompt: TextPrompt = input,
 ) -> int:
-    """Prompt for credentials and atomically create the project dotenv file."""
+    """Prompt for access and optional SMTP settings, then atomically create .env."""
 
     arguments = _arguments(argv)
     try:
@@ -68,7 +102,14 @@ def main(
             return 2
         password = _read_password(password_prompt)
         credentials = _new_credentials(password, arguments)
-        _write_dotenv(_dotenv_document(credentials), replace=arguments.replace)
+        email_configuration = _read_optional_email_configuration(
+            text_prompt,
+            password_prompt,
+        )
+        _write_dotenv(
+            _dotenv_document(credentials, email_configuration),
+            replace=arguments.replace,
+        )
     except KeyboardInterrupt:
         print("Setup cancelled.", file=sys.stderr)
         return 1
@@ -77,7 +118,11 @@ def main(
         return 1
 
     print(f"Created {_display_path(DOTENV_PATH)}.")
-    print("Configuration access is ready.")
+    if email_configuration is None:
+        print("Configuration access is ready.")
+    else:
+        print("Configuration access and email notifications are ready.")
+        print("Run `uv run apasz-hub-email-test` to verify SMTP delivery.")
     return 0
 
 
@@ -178,7 +223,91 @@ def _new_credentials(
     )
 
 
-def _dotenv_document(credentials: _AccessCredentials) -> str:
+def _read_optional_email_configuration(
+    text_prompt: TextPrompt,
+    password_prompt: PasswordPrompt,
+) -> _EmailConfiguration | None:
+    """Prompt for SMTP notifications only when the operator opts in."""
+
+    if not _confirm(text_prompt, "Configure email notifications? [y/N]: "):
+        return None
+
+    events = text_prompt(
+        f"Notification events [{DEFAULT_EMAIL_NOTIFICATION_EVENTS}]: "
+    ).strip()
+    smtp_host = text_prompt("SMTP host: ").strip()
+    smtp_port = text_prompt(f"SMTP port [{DEFAULT_EMAIL_SMTP_PORT}]: ").strip()
+    smtp_security = text_prompt(
+        f"SMTP security [{EmailSmtpSecurity.STARTTLS.value}]: "
+    ).strip()
+    smtp_username = text_prompt("SMTP username (leave blank for none): ").strip()
+    smtp_password: str | None = None
+    if smtp_username:
+        smtp_password = password_prompt("SMTP password: ")
+        if not smtp_password:
+            raise SetupError("SMTP password must not be empty when a username is set.")
+    sender = text_prompt("Email sender: ").strip()
+    recipients = text_prompt("Email recipients (comma-separated): ").strip()
+
+    values = {
+        EMAIL_NOTIFICATION_EVENTS_ENV: events or DEFAULT_EMAIL_NOTIFICATION_EVENTS,
+        EMAIL_SMTP_HOST_ENV: smtp_host,
+        EMAIL_SMTP_PORT_ENV: smtp_port or str(DEFAULT_EMAIL_SMTP_PORT),
+        EMAIL_SMTP_SECURITY_ENV: smtp_security or EmailSmtpSecurity.STARTTLS.value,
+        EMAIL_FROM_ENV: sender,
+        EMAIL_TO_ENV: recipients,
+    }
+    if smtp_username:
+        values[EMAIL_SMTP_USERNAME_ENV] = smtp_username
+    if smtp_password is not None:
+        values[EMAIL_SMTP_PASSWORD_ENV] = smtp_password
+    try:
+        configured = load_settings(values)
+    except SettingsValidationError as error:
+        raise SetupError(str(error)) from error
+
+    configured_smtp_host = configured.email_smtp_host
+    configured_sender = configured.email_from
+    configured_recipients = configured.email_to
+    if (
+        configured_smtp_host is None
+        or configured_sender is None
+        or not configured_recipients
+    ):
+        raise SetupError("Validated email notification settings are incomplete.")
+    configured_password_secret = configured.email_smtp_password
+    configured_password = (
+        None
+        if configured_password_secret is None
+        else configured_password_secret.get_secret_value()
+    )
+    return _EmailConfiguration(
+        events=configured.email_notification_events,
+        smtp_host=configured_smtp_host,
+        smtp_port=configured.email_smtp_port,
+        smtp_security=configured.email_smtp_security,
+        sender=configured_sender,
+        recipients=configured_recipients,
+        smtp_username=configured.email_smtp_username,
+        smtp_password=configured_password,
+    )
+
+
+def _confirm(text_prompt: TextPrompt, prompt: str) -> bool:
+    """Read an explicit yes/no answer, defaulting safely to no."""
+
+    answer = text_prompt(prompt).strip().casefold()
+    if answer in {"", "n", "no"}:
+        return False
+    if answer in {"y", "yes"}:
+        return True
+    raise SetupError("Please answer yes or no.")
+
+
+def _dotenv_document(
+    credentials: _AccessCredentials,
+    email_configuration: _EmailConfiguration | None,
+) -> str:
     """Serialize only validated dotenv-safe values without displaying them."""
 
     lines = [
@@ -189,7 +318,44 @@ def _dotenv_document(credentials: _AccessCredentials) -> str:
     ]
     if not credentials.cookie_secure:
         lines.append(f"{CONFIG_COOKIE_SECURE_ENV}=false")
+    if email_configuration is not None:
+        lines.extend(_email_dotenv_lines(email_configuration))
     return "\n".join(lines) + "\n"
+
+
+def _email_dotenv_lines(configuration: _EmailConfiguration) -> list[str]:
+    """Serialize SMTP values with dotenv quoting that preserves secrets exactly."""
+
+    event_values = ",".join(
+        event.value for event in EmailNotificationEvent if event in configuration.events
+    )
+    lines = [
+        _dotenv_assignment(EMAIL_NOTIFICATION_EVENTS_ENV, event_values),
+        _dotenv_assignment(EMAIL_SMTP_HOST_ENV, configuration.smtp_host),
+        _dotenv_assignment(EMAIL_SMTP_PORT_ENV, str(configuration.smtp_port)),
+        _dotenv_assignment(EMAIL_SMTP_SECURITY_ENV, configuration.smtp_security.value),
+        _dotenv_assignment(EMAIL_FROM_ENV, configuration.sender),
+        _dotenv_assignment(EMAIL_TO_ENV, ",".join(configuration.recipients)),
+    ]
+    if configuration.smtp_username is not None:
+        password = configuration.smtp_password
+        if password is None:
+            raise SetupError("SMTP credentials are incomplete.")
+        lines.extend(
+            (
+                _dotenv_assignment(
+                    EMAIL_SMTP_USERNAME_ENV, configuration.smtp_username
+                ),
+                _dotenv_assignment(EMAIL_SMTP_PASSWORD_ENV, password),
+            )
+        )
+    return lines
+
+
+def _dotenv_assignment(name: str, value: str) -> str:
+    """Return one safely quoted UTF-8 dotenv assignment for an SMTP setting."""
+
+    return f"{name}={json.dumps(value, ensure_ascii=False)}"
 
 
 def _write_dotenv(document: str, *, replace: bool) -> None:

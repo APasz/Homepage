@@ -17,12 +17,31 @@ from apasz_hub.settings import (
     CONFIG_COOKIE_SECURE_ENV,
     CONFIG_PASSWORD_HASH_ENV,
     CONFIG_SESSION_SECRET_ENV,
+    EMAIL_FROM_ENV,
+    EMAIL_NOTIFICATION_EVENTS_ENV,
+    EMAIL_SMTP_HOST_ENV,
+    EMAIL_SMTP_PASSWORD_ENV,
+    EMAIL_SMTP_USERNAME_ENV,
+    EMAIL_TO_ENV,
     PUBLIC_ORIGIN_ENV,
+    EmailNotificationEvent,
+    EmailSmtpSecurity,
 )
 
 
 def _password_prompt(values: tuple[str, ...]) -> setup.PasswordPrompt:
     """Return a deterministic password prompt for an isolated command test."""
+
+    remaining: Iterator[str] = iter(values)
+
+    def prompt(_: str) -> str:
+        return next(remaining)
+
+    return prompt
+
+
+def _text_prompt(values: tuple[str, ...]) -> setup.TextPrompt:
+    """Return deterministic ordinary terminal input for an isolated setup test."""
 
     remaining: Iterator[str] = iter(values)
 
@@ -62,6 +81,7 @@ class SetupCommandTests(TestCase):
                 status = setup.main(
                     (),
                     password_prompt=_password_prompt((password, password)),
+                    text_prompt=_text_prompt(("",)),
                 )
                 document = dotenv_path.read_text(encoding="utf-8")
                 file_mode = stat.S_IMODE(dotenv_path.stat().st_mode)
@@ -85,6 +105,69 @@ class SetupCommandTests(TestCase):
         self.assertIn(f"{PUBLIC_ORIGIN_ENV}=https://apasz.com", document)
         self.assertNotIn(password, document)
         self.assertNotIn(password, output.getvalue())
+
+    def test_can_create_an_authenticated_email_configuration(self) -> None:
+        password = "correct horse battery staple"
+        smtp_password = 'smtp password #$ "literal"'
+        sender = "hub@bücher.example"
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            dotenv_path = root / ".env"
+            output = StringIO()
+            with (
+                _temporary_setup_dotenv(dotenv_path),
+                redirect_stdout(output),
+            ):
+                status = setup.main(
+                    (),
+                    password_prompt=_password_prompt(
+                        (password, password, smtp_password)
+                    ),
+                    text_prompt=_text_prompt(
+                        (
+                            "yes",
+                            "startup",
+                            "smtp.example.com",
+                            "",
+                            "",
+                            "hub-user",
+                            sender,
+                            "owner@example.com, backup@example.com",
+                        )
+                    ),
+                )
+                document = dotenv_path.read_text(encoding="utf-8")
+                with chdir(root), patch.dict(os.environ, {}, clear=True):
+                    configured = settings.load_settings()
+
+        configured_password = configured.email_smtp_password
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            configured.email_notification_events,
+            frozenset((EmailNotificationEvent.STARTUP,)),
+        )
+        self.assertEqual(configured.email_smtp_host, "smtp.example.com")
+        self.assertEqual(configured.email_smtp_username, "hub-user")
+        self.assertEqual(configured.email_from, sender)
+        self.assertIsNotNone(configured_password)
+        assert configured_password is not None
+        self.assertEqual(configured_password.get_secret_value(), smtp_password)
+        self.assertIs(configured.email_smtp_security, EmailSmtpSecurity.STARTTLS)
+        self.assertEqual(
+            configured.email_to,
+            ("owner@example.com", "backup@example.com"),
+        )
+        for environment_name in (
+            EMAIL_NOTIFICATION_EVENTS_ENV,
+            EMAIL_SMTP_HOST_ENV,
+            EMAIL_SMTP_USERNAME_ENV,
+            EMAIL_SMTP_PASSWORD_ENV,
+            EMAIL_FROM_ENV,
+            EMAIL_TO_ENV,
+        ):
+            self.assertIn(f"{environment_name}=", document)
+        self.assertNotIn(smtp_password, output.getvalue())
+        self.assertIn("apasz-hub-email-test", output.getvalue())
 
     def test_existing_dotenv_is_not_overwritten_or_prompted_without_replace(
         self,
@@ -122,6 +205,7 @@ class SetupCommandTests(TestCase):
                 status = setup.main(
                     ("--replace", "--origin", "https://example.com"),
                     password_prompt=_password_prompt((password, password)),
+                    text_prompt=_text_prompt(("",)),
                 )
 
             document = dotenv_path.read_text(encoding="utf-8")
@@ -167,6 +251,7 @@ class SetupCommandTests(TestCase):
                         "--insecure-cookie",
                     ),
                     password_prompt=_password_prompt((password, password)),
+                    text_prompt=_text_prompt(("",)),
                 )
                 document = dotenv_path.read_text(encoding="utf-8")
                 with chdir(root), patch.dict(os.environ, {}, clear=True):

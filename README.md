@@ -95,6 +95,54 @@ rate-limited after five failures in 15 minutes. Login outcomes and explicit
 configuration save, add, and delete actions are logged without logging
 passwords or submitted configuration data.
 
+## Email notifications
+
+Email notifications are disabled by default. During new-project setup,
+`uv run apasz-hub-setup` offers to configure them interactively, including a
+hidden SMTP-password prompt. For an existing `.env`, add the values below
+manually; `--replace` intentionally rotates the configuration credentials and
+replaces the whole file.
+
+```dotenv
+EMAIL_NOTIFICATION_EVENTS=startup,configuration_saved
+EMAIL_SMTP_HOST=smtp.example.com
+EMAIL_SMTP_PORT=587
+EMAIL_SMTP_SECURITY=starttls
+EMAIL_SMTP_USERNAME=hub-user
+EMAIL_SMTP_PASSWORD=your-smtp-password
+EMAIL_FROM=hub@example.com
+EMAIL_TO=owner@example.com,backup@example.com
+```
+
+Send a test message after setup or manual configuration:
+
+```bash
+uv run apasz-hub-email-test
+```
+
+The test command sends one message even if notification events are currently
+disabled. It exits non-zero for incomplete settings or SMTP delivery failures.
+
+`startup` is sent after the application has loaded its published data.
+`configuration_saved` covers successful colour, Open Graph, and link-card
+saves. These emails use a short, friendly summary of what is now live: colours
+show their old and new values, sharing settings show their changed public
+values, and link cards name added, removed, edited, or reordered cards. Long
+summaries are capped so one large save does not flood your inbox. They never
+include SMTP credentials or configuration-login secrets.
+
+`EMAIL_SMTP_SECURITY` defaults to `starttls`; use `ssl` (or the common
+`SSL/TLS` label) for implicit TLS, for example on port 465. `none` is available
+only for a trusted local SMTP relay.
+`EMAIL_SMTP_USERNAME` and `EMAIL_SMTP_PASSWORD` are optional, but must be set
+together and use ASCII characters. `EMAIL_TO` is a comma-separated recipient
+list. When events are enabled, the SMTP host, sender, and at least one
+recipient are required.
+
+Each delivery attempt has a 10-second SMTP timeout. A delivery failure is
+logged and never rolls back a configuration save or causes application startup
+to fail.
+
 ## Appearance
 
 Shared interface colours are stored in `src/apasz_hub/theme_colors.json` and

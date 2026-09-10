@@ -16,6 +16,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project.scripts]
+apasz-hub-email-test = "apasz_hub.email_test:main"
 apasz-hub-setup = "apasz_hub.setup:main"
 
 [dependency-groups]
