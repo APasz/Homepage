@@ -101,6 +101,7 @@ def document_asset_headers() -> tuple[HtmlNode, ...]:
     """Build static document tags that do not depend on site configuration."""
 
     return (
+        Meta(name="darkreader-lock"),
         Link(rel="icon", type="image/png", sizes="64x64", href=FAVICON_URL),
         Link(rel="stylesheet", href=THEME_STYLESHEET_URL),
         Link(rel="stylesheet", href=SITE_STYLESHEET_URL),

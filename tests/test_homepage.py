@@ -556,6 +556,7 @@ class HomepageTests(TestCase):
         self.assertIn(f'src="{SITE_SCRIPT_URL}"', headers)
         self.assertIn(f'href="{THEME_STYLESHEET_URL}"', headers)
         self.assertIn(f'href="{SITE_STYLESHEET_URL}"', headers)
+        self.assertIn('<meta name="darkreader-lock">', headers)
         self.assertLess(
             headers.index('<meta charset="utf-8">'),
             headers.index("<title>APasz</title>"),
