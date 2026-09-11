@@ -123,7 +123,9 @@ uv run apasz-hub-email-test
 The test command sends one message even if notification events are currently
 disabled. It exits non-zero for incomplete settings or SMTP delivery failures.
 
-`startup` is sent after the application has loaded its published data.
+`startup` is scheduled after the application has loaded its published data and
+started its background services. SMTP delivery does not hold application
+readiness; its lifecycle-owned task is cancelled and awaited during shutdown.
 `configuration_saved` covers successful colour, Open Graph, and link-card
 saves. These emails use a short, friendly summary of what is now live: colours
 show their old and new values, sharing settings show their changed public
@@ -191,9 +193,10 @@ PORT=2036 HOST=127.0.0.1 uv run python -m apasz_hub.production
 
 Production disables reload and Uvicorn's identifying header. It accepts
 forwarded headers only from a loopback Caddy proxy (`127.0.0.1`), so login
-rate limiting sees the browser's client address. This deployment assumes the
-application port remains loopback-only and is never directly exposed; keep
-`HOST=127.0.0.1` when Caddy runs on the same host.
+rate limiting has a second, application-level layer using the client address
+that Caddy supplies. This deployment assumes the application port remains
+loopback-only and is never directly exposed; keep `HOST=127.0.0.1` when Caddy
+runs on the same host.
 
 When a TLS proxy or CDN fronts the site, firewall the application port so the
 origin cannot be reached directly. Set `PUBLIC_ORIGIN` to the public
@@ -201,6 +204,36 @@ HTTPS origin; it remains authoritative for CSRF and origin validation. Do not
 derive security decisions from forwarded Host or other request headers. An
 identity-aware proxy with MFA and edge rate limiting can provide an additional
 admin boundary.
+
+The production Caddy configuration must rate-limit only `POST /config/login`
+before proxying it to the application. Caddy's stock package does not include
+the required handler; build it with the reviewed
+`github.com/mholt/caddy-ratelimit` module, then use a route equivalent to:
+
+```caddyfile
+route {
+    rate_limit {
+        zone apasz_hub_config_login {
+            match {
+                method POST
+                path /config/login
+            }
+            key {remote_host}
+            events 10
+            window 1m
+            ipv6_prefix 64
+        }
+    }
+    reverse_proxy 127.0.0.1:1996
+}
+```
+
+`{remote_host}` is Caddy's direct TLS peer, not a caller-supplied
+`X-Forwarded-For` value. If a CDN or another proxy is introduced in front of
+Caddy, configure its exact trusted proxy ranges there before changing the
+rate-limit key; do not make the application trust arbitrary forwarded headers.
+This route does not add a public `/config` link or alter the application's
+authentication and CSRF checks.
 
 Responses use a restrictive CSP and browser-hardening headers
 Card inline styles remain allowed
@@ -212,16 +245,22 @@ Configure HSTS at the TLS-terminating proxy or CDN
 ### GitHub deployments
 
 After the `Verify` workflow succeeds for a commit on `main`, the production
-workflow deploys that exact commit over SSH. Deployments are serialized; stale
-commits are skipped, and any failure after checkout restores the previous
-release before reporting failure.
+workflow deploys that exact commit over SSH. A manual production dispatch first
+calls that same reusable `Verify` workflow for its exact SHA, so it cannot skip
+Ruff, basedpyright, tests, shell validation, or the email-command check.
+Deployments are serialized; stale commits are skipped, and any failure after
+checkout restores the previous release before reporting failure.
 
 The Eisei deployment uses `/opt/apasz-hub` for the checkout and virtual
 environment, and `/var/lib/apasz-hub` for persistent data and FastHTML's
 session key. Install `deploy/apasz-hub.service` and
 `deploy/apasz-hub-deploy.sudoers` with root ownership. The `apasz-deploy`
 account owns the checkout and may restart only `apasz-hub.service`; it cannot
-read the runtime data owned by the service account.
+read the runtime data owned by the locked `apasz-hub` system account. The
+runtime account has read/execute access to the application and virtual
+environment, read-only access to its dotenv configuration, and exclusive
+ownership of `/var/lib/apasz-hub`; it must not have write access to
+`/opt/apasz-hub`, sudo, or deployment credentials.
 
 Create a GitHub `production` environment and configure:
 

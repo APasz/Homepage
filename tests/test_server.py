@@ -82,19 +82,34 @@ class ServerTests(TestCase):
 
 
 class AppLifecycleTests(IsolatedAsyncioTestCase):
-    """Keep the GitHub refresher attached to the ASGI application lifecycle."""
+    """Keep lifecycle-owned background services attached to the ASGI application."""
 
-    async def test_lifespan_starts_and_stops_the_github_refresher(self) -> None:
+    async def test_lifespan_does_not_wait_for_and_cancels_startup_email(
+        self,
+    ) -> None:
         received: asyncio.Queue[Message] = asyncio.Queue()
         sent: list[Message] = []
         startup_complete = asyncio.Event()
+        notification_started = asyncio.Event()
+        notification_cancelled = asyncio.Event()
         refresher = Mock()
         refresher.stop = AsyncMock()
         link_card_store = Mock()
         theme_color_store = Mock()
         open_graph_store = Mock()
         email_notifications = Mock()
-        email_notifications.notify = AsyncMock()
+
+        async def await_notification_shutdown(*_: object) -> None:
+            notification_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                notification_cancelled.set()
+                raise
+
+        email_notifications.notify = AsyncMock(
+            side_effect=await_notification_shutdown
+        )
         test_app = create_application(
             ApplicationServices(
                 link_cards=link_card_store,
@@ -125,6 +140,7 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
         lifespan = asyncio.create_task(test_app(scope, receive, send))
         await received.put({"type": "lifespan.startup"})
         await asyncio.wait_for(startup_complete.wait(), timeout=1)
+        await asyncio.wait_for(notification_started.wait(), timeout=1)
         await received.put({"type": "lifespan.shutdown"})
         await asyncio.wait_for(lifespan, timeout=1)
 
@@ -137,6 +153,7 @@ class AppLifecycleTests(IsolatedAsyncioTestCase):
             EmailNotificationEvent.STARTUP,
             STARTUP_EMAIL_DETAIL,
         )
+        self.assertTrue(notification_cancelled.is_set())
         self.assertEqual(
             [message["type"] for message in sent],
             ["lifespan.startup.complete", "lifespan.shutdown.complete"],

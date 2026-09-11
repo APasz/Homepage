@@ -6,7 +6,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=debian
+User=apasz-hub
 Group=apasz-hub
 WorkingDirectory=/var/lib/apasz-hub
 EnvironmentFile=/etc/apasz-hub/runtime.env

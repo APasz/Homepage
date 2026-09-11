@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from apasz_hub.data import LinkCardStore
 from apasz_hub.github import (
@@ -13,6 +13,7 @@ from apasz_hub.github import (
 from apasz_hub.notifications import (
     DISABLED_EMAIL_NOTIFICATIONS,
     EmailNotificationDispatcher,
+    StartupEmailNotification,
     email_notification_service,
 )
 from apasz_hub.open_graph import OpenGraphStore
@@ -30,6 +31,9 @@ class ApplicationServices:
     github_repository_counts: GithubRepositoryCountCache
     github_repository_refresher: GithubRepositoryCountRefresher
     email_notifications: EmailNotificationDispatcher = DISABLED_EMAIL_NOTIFICATIONS
+    startup_email_notification: StartupEmailNotification = field(
+        default_factory=StartupEmailNotification
+    )
 
 
 def create_application_services(

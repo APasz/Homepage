@@ -73,6 +73,49 @@ DISABLED_EMAIL_NOTIFICATIONS: Final[EmailNotificationDispatcher] = (
 )
 
 
+class StartupEmailNotification:
+    """Own one non-blocking startup notification for an application lifecycle."""
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task[None] | None = None
+
+    def start(
+        self,
+        dispatcher: EmailNotificationDispatcher,
+        detail: str,
+    ) -> None:
+        """Schedule the startup notification without delaying application readiness."""
+
+        if self._task is not None:
+            raise RuntimeError("Startup email notification is already scheduled.")
+        self._task = asyncio.create_task(
+            self._notify_safely(dispatcher, detail),
+            name="startup-email-notification",
+        )
+
+    async def stop(self) -> None:
+        """Cancel and await the owned notification task during shutdown."""
+
+        task = self._task
+        self._task = None
+        if task is None:
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _notify_safely(
+        self,
+        dispatcher: EmailNotificationDispatcher,
+        detail: str,
+    ) -> None:
+        """Log unexpected dispatcher failures outside the startup critical path."""
+
+        try:
+            await dispatcher.notify(EmailNotificationEvent.STARTUP, detail)
+        except Exception:
+            LOGGER.exception("Unable to dispatch startup email notification.")
+
+
 @dataclass(frozen=True, slots=True)
 class EmailNotificationService:
     """Deliver selected notifications through one authenticated SMTP endpoint."""

@@ -30,7 +30,6 @@ from apasz_hub.routes.authentication import (
 from apasz_hub.routes.configuration import register_configuration_routes
 from apasz_hub.routes.public import register_public_routes
 from apasz_hub.services import ApplicationServices
-from apasz_hub.settings import EmailNotificationEvent
 
 STATIC_DIRECTORY: Final = Path(__file__).parent / "static"
 STARTUP_EMAIL_DETAIL: Final = "APasz Hub is up and running."
@@ -135,8 +134,8 @@ def _startup(services: ApplicationServices) -> LifecycleHook:
         services.link_cards.load()
         config_security.CONFIG_ACCESS.settings()
         services.github_repository_refresher.start()
-        await services.email_notifications.notify(
-            EmailNotificationEvent.STARTUP,
+        services.startup_email_notification.start(
+            services.email_notifications,
             STARTUP_EMAIL_DETAIL,
         )
 
@@ -147,6 +146,7 @@ def _shutdown(services: ApplicationServices) -> LifecycleHook:
     """Create the application-stop hook for one service bundle."""
 
     async def stop_application() -> None:
+        await services.startup_email_notification.stop()
         await services.github_repository_refresher.stop()
 
     return stop_application

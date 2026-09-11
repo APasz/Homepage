@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import ssl
 import threading
 from email.message import EmailMessage
 from types import TracebackType
 from typing import Self
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from apasz_hub.notifications import (
     SMTP_TIMEOUT_SECONDS,
     TEST_EMAIL_DETAIL,
     EmailNotificationService,
     EmailNotificationSettings,
+    StartupEmailNotification,
     email_test_service,
 )
 from apasz_hub.settings import (
@@ -80,6 +82,33 @@ def _notification_settings(
         smtp_username="smtp-user",
         smtp_password="smtp-password",
     )
+
+
+class StartupEmailNotificationTests(IsolatedAsyncioTestCase):
+    """Keep startup-only notification failures outside application readiness."""
+
+    async def test_dispatcher_failure_is_logged_without_raising(self) -> None:
+        dispatcher = Mock()
+        notification_called = asyncio.Event()
+
+        async def fail_notification(*_: object) -> None:
+            notification_called.set()
+            raise RuntimeError("SMTP unavailable")
+
+        dispatcher.notify = AsyncMock(side_effect=fail_notification)
+        notification = StartupEmailNotification()
+
+        with self.assertLogs("apasz_hub.notifications", level="ERROR") as logs:
+            notification.start(dispatcher, "The application started successfully.")
+            await asyncio.wait_for(notification_called.wait(), timeout=1)
+            await asyncio.sleep(0)
+            await notification.stop()
+
+        dispatcher.notify.assert_awaited_once_with(
+            EmailNotificationEvent.STARTUP,
+            "The application started successfully.",
+        )
+        self.assertIn("Unable to dispatch startup email notification", logs.output[0])
 
 
 class EmailNotificationServiceTests(IsolatedAsyncioTestCase):
